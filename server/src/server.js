@@ -1,5 +1,6 @@
 import { createServer } from 'node:http';
 import { readFile, stat } from 'node:fs/promises';
+import { readFileSync } from 'node:fs';
 import { join, extname, normalize } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { openDb } from './db.js';
@@ -18,7 +19,11 @@ const MIME = {
 const db = openDb(DB_PATH);
 // Local backup folder (empty value disables local copies). Cloud upload is configured in the admin panel.
 const BACKUP_DIR = process.env.BACKUP_DIR ?? join(dirname(DB_PATH), 'backups');
-const api = createApi(db, { backupDir: DB_PATH === ':memory:' ? '' : BACKUP_DIR });
+// APP_VERSION / APP_COMMIT are baked in by the Docker build; plain `npm start` falls back to package.json.
+const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
+const VERSION = process.env.APP_VERSION && process.env.APP_VERSION !== 'dev' ? process.env.APP_VERSION : `${pkg.version}-dev`;
+const COMMIT = process.env.APP_COMMIT ?? 'unknown';
+const api = createApi(db, { backupDir: DB_PATH === ':memory:' ? '' : BACKUP_DIR, version: VERSION, commit: COMMIT });
 
 // Networks with auto-scan enabled are pinged every SCAN_INTERVAL_MIN minutes (0 disables). Needs LAN reachability from the container.
 const SCAN_MIN = Number(process.env.SCAN_INTERVAL_MIN ?? 15);
@@ -89,6 +94,8 @@ async function serveStatic(res, pathname) {
     res.writeHead(404).end('Not found');
   }
 }
+
+console.log(`simpleIPAM ${VERSION} (${COMMIT.slice(0, 7)})`);
 
 createServer(async (req, res) => {
   const url = new URL(req.url, 'http://x');

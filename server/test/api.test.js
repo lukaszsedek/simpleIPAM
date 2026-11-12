@@ -17,6 +17,7 @@ const client = (api) => {
   call.login = (username, password = 'password123') => call('POST', '/api/auth/login', { username, password });
   return call;
 };
+const boot0 = () => ({ api: null, newClient: (() => { const api = createApi(openDb(':memory:')); return () => client(api); })() });   // empty instance, nobody registered
 const boot = async () => {
   const api = createApi(openDb(':memory:'));
   const admin = client(api);
@@ -31,6 +32,17 @@ const mkSite = async (c, name, tenant = 'home') => {
 };
 const sitesOf = (overview) => overview.flatMap((t) => t.sites);
 const user = async ({ api, newClient }, name) => { const c = newClient(); await c.register(name); return c; };
+
+test('version is exposed to the UI (public /api/me) and in the admin system info', async () => {
+  const api = createApi(openDb(':memory:'), { version: '1.2.3', commit: 'abcdef1234' });
+  const ctx = {};
+  assert.equal((await api('GET', '/api/me', {}, {}, ctx)).version, '1.2.3');       // visible before login
+  await api('POST', '/api/auth/register', {}, { username: 'admin', password: 'password123' }, ctx);
+  ctx.token = ctx.newToken;
+  const sys = await api('GET', '/api/admin/system', {}, {}, ctx);
+  assert.deepEqual([sys.version, sys.commit], ['1.2.3', 'abcdef1234']);
+  assert.equal((await createApi(openDb(':memory:'))('GET', '/api/me', {}, {})).version, 'dev');
+});
 
 test('cidr helpers', () => {
   assert.equal(normalizeCidr('192.168.1.77/24'), '192.168.1.0/24');
@@ -313,4 +325,35 @@ test('scan records last_seen and discovered hosts; scheduler only scans auto_sca
   assert.equal(d.ip, '10.0.1.5');
   await admin('POST', `/api/discovered/${d.id}/dismiss`);
   assert.equal((await admin('GET', `/api/networks/${auto.id}/discovered`)).length, 0);
+});
+
+test('first run: setup screen flag, first account is Admin, later sign-ups start with no access until an admin assigns a role', async () => {
+  const env = await boot0();
+  const { newClient } = env;
+  const anon = newClient();
+  assert.equal((await anon('GET', '/api/me')).setup_required, true);
+
+  const admin = newClient();
+  const first = await admin.register('admin');
+  assert.equal(first.first, true);
+  assert.equal(first.user.global_role, 'admin');
+  assert.equal((await anon('GET', '/api/me')).setup_required, false);
+
+  const eve = newClient();
+  const second = await eve.register('eve');
+  assert.equal(second.first, false);
+  assert.equal(second.user.global_role, 'none');                      // default role
+  assert.deepEqual(second.user.site_roles, {});
+  assert.deepEqual(sitesOf(await eve('GET', '/api/overview')), []);   // sees nothing
+  await assert.rejects(eve('GET', '/api/users'), /uprawnień/);
+
+  assert.equal((await admin('GET', '/api/me')).user.pending_users, 1);
+  assert.equal((await eve('GET', '/api/me')).user.pending_users, undefined);   // only admins see the count
+  const users = await admin('GET', '/api/users');
+  assert.deepEqual(users.map((u) => [u.username, u.no_roles]), [['admin', false], ['eve', true]]);
+
+  const eveId = users.find((u) => u.username === 'eve').id;
+  await admin('PUT', `/api/users/${eveId}/roles`, { role: 'reader' });
+  assert.equal((await admin('GET', '/api/me')).user.pending_users, 0);
+  assert.equal((await eve('GET', '/api/me')).user.global_role, 'reader');
 });

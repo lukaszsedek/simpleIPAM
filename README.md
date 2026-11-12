@@ -20,31 +20,54 @@ docker compose up -d          # http://localhost:8080
 docker run -d -p 8080:8080 -v ipam-data:/data ghcr.io/lukaszsedek/simpleipam:latest
 ```
 
-Aplikacja nie ma domyślnego konta: pierwsze zarejestrowane konto zostaje administratorem.
+Aplikacja nie ma domyślnego konta. Przy pierwszym uruchomieniu pokaże ekran **„Utwórz konto administratora”** — pierwsze konto zawsze dostaje rolę globalnego Admina. Zrób to od razu po starcie: kto pierwszy otworzy nową instancję, ten zostaje adminem, więc nie wystawiaj jej publicznie przed konfiguracją.
+Każda kolejna rejestracja tworzy konto z rolą **None** (bez dostępu do czegokolwiek); administrator widzi takie osoby w *Administracja → Użytkownicy* (znacznik „brak uprawnień” i licznik przy przycisku Administracja) i nadaje im role.
 Skan ping wymaga uruchomienia w sieci, którą ma skanować (`network_mode: host` dla sieci LAN).
 
 ## Obraz Docker i GitHub Actions
 
-Workflow `.github/workflows/ci.yml` przy każdym pushu na `main` i tagu `v*`:
+Workflow `.github/workflows/ci.yml` przy każdym pushu na `main` i tagu wersji:
 
-1. uruchamia testy (`npm test`),
-2. buduje obraz, **uruchamia go** i sprawdza (`/api/health`, strona główna, rejestracja pierwszego admina),
-3. buduje wieloarchitekturowy obraz (`linux/amd64` i `linux/arm64`, np. Raspberry Pi) i wypycha go do **GitHub Container Registry**: `ghcr.io/lukaszsedek/simpleipam`.
+1. uruchamia testy (`npm test`); dla tagu sprawdza też, że wersja w `package.json` i `CHANGELOG.md` zgadza się z tagiem,
+2. buduje obraz, **uruchamia go** i sprawdza (`/api/health`, strona główna, wersja, rejestracja pierwszego admina),
+3. buduje wieloarchitekturowy obraz (`linux/amd64` i `linux/arm64`, np. Raspberry Pi) i wypycha go do **GitHub Container Registry**: `ghcr.io/lukaszsedek/simpleipam`,
+4. dla tagu tworzy **GitHub Release** z opisem z `CHANGELOG.md`.
 
 Pull requesty tylko budują i testują, nic nie publikują.
 
-| Zdarzenie | Tagi obrazu |
-|---|---|
-| push na `main` | `latest`, `sha-<krótki hash>` |
-| tag `v1.2.3` | `1.2.3`, `1.2`, `sha-…` |
+## Wersjonowanie
 
-Wydanie wersji: `git tag v1.0.0 && git push origin v1.0.0`.
+Projekt używa [SemVer](https://semver.org/lang/pl/) (`MAJOR.MINOR.PATCH`, np. `0.1.0`; do `1.0.0` zmiany niekompatybilne mogą wypadać w `MINOR`). Źródłem prawdy jest wersja w `server/package.json` (identyczna w `web/package.json`), a każde wydanie to tag git `vX.Y.Z`. Aktualna wersja jest widoczna w aplikacji (pasek boczny, Administracja → Ustawienia).
+
+| Tag obrazu | Znaczenie |
+|---|---|
+| `0.1.0` | dokładnie to wydanie (niezmienne) |
+| `0.1` | najnowsza łatka z linii `0.1.x` |
+| `1` | najnowsze `1.x.y` (tylko od `1.0.0`) |
+| `latest` | najnowsze **stabilne** wydanie (bez prerelease) |
+| `edge` | bieżący `main` (może być niestabilny) |
+| `sha-<hash>` | konkretny commit |
+
+Do produkcji przypnij konkretną wersję (`…:0.1.0`) albo linię (`…:0.1`) zamiast `latest`.
+
+### Jak wydać nową wersję
+
+1. Opisz zmiany w `CHANGELOG.md` pod `## [Unreleased]`.
+2. Uruchom (z czystego `main`):
+   ```sh
+   node scripts/release.mjs minor            # albo patch / major / konkretna wersja, np. 1.0.0-rc.1
+   node scripts/release.mjs minor --dry-run  # tylko pokaż, co się stanie
+   ```
+   Skrypt uruchamia testy, podnosi wersję w `server/` i `web/`, zamienia `[Unreleased]` w nagłówek z datą, robi commit `Release vX.Y.Z` i tag. Niczego nie wypycha.
+3. Wypchnij: `git push origin main --follow-tags`. Tag uruchamia pipeline: obraz z tagami powyżej i GitHub Release.
+
+Wersje z myślnikiem (`1.0.0-rc.1`) są oznaczane jako prerelease i nie przesuwają `latest`.
 
 Jednorazowo po pierwszym pushu: pakiet w GHCR jest domyślnie **prywatny**. Żeby można go było pobrać bez logowania, wejdź w *GitHub → Packages → simpleipam → Package settings → Change visibility → Public* (repozytorium jest publiczne, ale widoczność pakietu ustawia się osobno).
 
 ## Uprawnienia
 
-Pierwsze zarejestrowane konto zostaje globalnym Adminem; kolejne mają rolę None, dopóki Admin nie nada uprawnień (zakładka *Użytkownicy*).
+Pierwsze konto (ekran pierwszego uruchomienia) zostaje globalnym Adminem; kolejne rejestracje mają rolę None, dopóki Admin nie nada uprawnień (Administracja → *Użytkownicy*).
 Obowiązuje najbardziej szczegółowa rola: **lokalizacja → tenant → globalna** (np. Reader na tenancie + None na lab2 = brak dostępu do lab2). Rejestrację można wyłączyć w panelu *Użytkownicy*.
 
 | Rola | Zakres |

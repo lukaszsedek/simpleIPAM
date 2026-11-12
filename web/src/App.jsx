@@ -218,6 +218,8 @@ export function App() {
   const [tenants, setTenants] = useState([]);
   const sites = useMemo(() => tenants.flatMap((t) => t.sites), [tenants]);
   const [regOpen, setRegOpen] = useState(true);
+  const [version, setVersion] = useState('');
+  const [setupRequired, setSetupRequired] = useState(false);
   const [loaded, setLoaded] = useState(false);
   const [open, setOpen] = useState({});
   const [modal, setModal] = useState(null);
@@ -237,7 +239,7 @@ export function App() {
   const go = (to) => { location.hash = to; };
 
   useEffect(() => {
-    api.me().then((r) => { setMe(r.user); setRegOpen(r.registration_open); }).catch(() => setMe(null));
+    api.me().then((r) => { setMe(r.user); setRegOpen(r.registration_open); setVersion(r.version ?? ''); setSetupRequired(!!r.setup_required); }).catch(() => setMe(null));
     const f = () => { setMe(null); setTenants([]); setLoaded(false); };
     addEventListener('ipam:unauth', f);
     return () => removeEventListener('ipam:unauth', f);
@@ -264,6 +266,7 @@ export function App() {
   const isAdmin = me?.global_role === 'admin';
   // legacy #/users and #/audit still work
   const adminTab = isAdmin ? (/^#\/admin(?:\/(\w+))?/.exec(hash)?.[1] ?? (hash === '#/users' ? 'users' : hash === '#/audit' ? 'audit' : hash.startsWith('#/admin') ? 'users' : null)) : null;
+  const refreshMe = () => api.me().then((r) => setMe(r.user)).catch(() => {});   // e.g. the pending-users badge
   const logout = async () => { await api.logout(); setMe(null); setTenants([]); setLoaded(false); go('#/'); };
 
   const delTenant = async (t) => {
@@ -280,7 +283,7 @@ export function App() {
   };
 
   if (me === undefined) return null;
-  if (!me) return <AuthScreen registrationOpen={regOpen} onAuth={(u) => { setMe(u); go('#/'); }} />;
+  if (!me) return <AuthScreen version={version} setup={setupRequired} registrationOpen={regOpen} onAuth={(u) => { setSetupRequired(false); setMe(u); go('#/'); }} />;
 
   return (
     <div class="shell">
@@ -333,7 +336,7 @@ export function App() {
         <div class="side-foot">
           {isAdmin && <button class="btn ghost block" onClick={() => setModal({ kind: 'tenant' })}><Icon name="plus" />Tenant</button>}
           {isAdmin && (
-            <a class={`btn ghost block ${adminTab ? 'on' : ''}`} href="#/admin"><Icon name="settings" />Administracja</a>
+            <a class={`btn ghost block ${adminTab ? 'on' : ''}`} href="#/admin"><Icon name="settings" />Administracja{me.pending_users > 0 && <b class="badge" title="Użytkownicy bez uprawnień">{me.pending_users}</b>}</a>
           )}
           <div class="user-box">
             <span class="name" title={me.username}>{me.username}</span>
@@ -345,12 +348,13 @@ export function App() {
             <button class="icon-btn" onClick={logout} aria-label="Wyloguj" title="Wyloguj"><Icon name="logout" size={16} /></button>
             </div>
           </div>
+          {version && <a class="version" href="https://github.com/lukaszsedek/simpleIPAM/releases" target="_blank" rel="noopener" title="Historia wersji">simpleIPAM v{version.replace(/^v/, '')}</a>}
         </div>
       </aside>
 
       <main>
         <button class="menu-btn icon-btn" onClick={() => setNav(!nav)} aria-label="Menu"><Icon name="menu" /></button>
-        {adminTab ? <Admin tab={adminTab} tenants={tenants} me={me} notify={notify} />
+        {adminTab ? <Admin tab={adminTab} tenants={tenants} me={me} notify={notify} onUsersChanged={refreshMe} />
           : netId ? <Network key={`${netId}-${rev}`} id={netId} notify={notify} reload={reload}
               onEditNet={(n) => setModal({ kind: 'net', net: n })} onDeleteNet={delNet} />
           : loaded && (

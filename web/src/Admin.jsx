@@ -43,6 +43,7 @@ function Settings({ notify }) {
         <h3>System</h3>
         {sys ? (
           <dl class="kv">
+            <dt>Wersja</dt><dd class="mono" title={`commit ${sys.commit}`}>{sys.version}{sys.commit !== 'unknown' && ` (${sys.commit.slice(0, 7)})`}</dd>
             <dt>Rozmiar bazy</dt><dd>{bytes(sys.db_bytes)}</dd>
             <dt>Tenanty / lokalizacje</dt><dd>{sys.counts.tenants} / {sys.counts.sites}</dd>
             <dt>Sieci / wpisy</dt><dd>{sys.counts.networks} / {sys.counts.entries}</dd>
@@ -57,7 +58,7 @@ function Settings({ notify }) {
   );
 }
 
-export function Admin({ tab, tenants, me, notify }) {
+export function Admin({ tab, tenants, me, notify, onUsersChanged }) {
   return (
     <div class="page">
       <header class="page-head">
@@ -71,7 +72,7 @@ export function Admin({ tab, tenants, me, notify }) {
           <a role="tab" aria-selected={tab === k} class={tab === k ? 'on' : ''} href={`#/admin/${k}`}><Icon name={icon} size={16} />{label}</a>
         ))}
       </div>
-      {tab === 'users' && <Users tenants={tenants} me={me} notify={notify} />}
+      {tab === 'users' && <Users tenants={tenants} me={me} notify={notify} onChanged={onUsersChanged} />}
       {tab === 'backups' && <Backups notify={notify} />}
       {tab === 'settings' && <Settings notify={notify} />}
       {tab === 'audit' && <Audit />}

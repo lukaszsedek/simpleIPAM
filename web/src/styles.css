@@ -325,3 +325,13 @@ a.icon-btn { text-decoration: none; }
 .btn.danger-solid { background: var(--danger); border-color: var(--danger); color: #fff; }
 .btn.danger-solid:hover { filter: brightness(1.1); background: var(--danger); }
 .btn.danger-solid:disabled { opacity: .4; cursor: not-allowed; }
+
+.version { display: block; text-align: center; font-size: 11px; color: var(--muted); padding-top: 2px; }
+.version:hover { color: var(--accent); }
+.auth { flex-direction: column; gap: 14px; }
+.auth-version { color: var(--muted); font-size: 12px; }
+
+.chip.warn { color: var(--warn); background: color-mix(in srgb, var(--warn) 14%, transparent); border-color: transparent; }
+.setup-intro h1 { font-size: 22px; margin: 0 0 6px; }
+.setup-intro p { margin: 0; }
+.btn .badge { margin-left: 8px; }

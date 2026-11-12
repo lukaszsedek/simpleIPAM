@@ -26,7 +26,7 @@ function PasswordModal({ target, onClose, notify }) {
   );
 }
 
-export function Users({ tenants, me, notify }) {
+export function Users({ tenants, me, notify, onChanged }) {
   const [users, setUsers] = useState([]);
   const [pwFor, setPwFor] = useState(null);
   const [add, setAdd] = useState({});   // userId -> { scope: 'tenant:1' | 'site:3', role } draft
@@ -36,6 +36,7 @@ export function Users({ tenants, me, notify }) {
   const act = async (fn, ok) => {
     try { await fn(); if (ok) notify(ok); } catch (e) { notify(e.message, 'error'); }
     load();
+    onChanged?.();
   };
   const sites = tenants.flatMap((t) => t.sites.map((s) => ({ ...s, tenantName: t.name })));
   const label = (kind, id) => kind === 'tenant'
@@ -67,6 +68,7 @@ export function Users({ tenants, me, notify }) {
                 return (
                   <tr key={u.id}>
                     <td><b>{u.username}</b>{u.id === me.id && <span class="chip accent" style="margin-left:8px">to Ty</span>}
+                      {u.no_roles && <span class="chip warn" style="margin-left:8px" title="Nowe konto bez żadnej roli — nie widzi żadnych danych">brak uprawnień</span>}
                       <div class="muted small-text">od {u.created_at.slice(0, 10)}</div></td>
                     <td><RoleSelect value={u.global_role} onChange={(r) => act(() => api.setRole(u.id, {}, r), 'Zapisano rolę')} /></td>
                     <td>

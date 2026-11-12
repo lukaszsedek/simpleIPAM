@@ -14,7 +14,7 @@ const bad = (m) => new HttpError(400, m);
 const TYPES = ['server', 'vm', 'container', 'router', 'switch', 'ap', 'iot', 'printer', 'pc', 'phone', 'nas', 'other'];
 const STATUSES = ['used', 'reserved', 'free'];
 
-// opts: ping(ip) -> Promise<boolean>, fetch (cloud uploads), backupDir (local backup folder; falsy disables) and gcsBase
+// opts: version/commit (shown in the UI), ping(ip) -> Promise<boolean>, fetch (cloud uploads), backupDir (local backup folder; falsy disables) and gcsBase
 // can be injected (tests); ping defaults to the system ping binary.
 export function createApi(db, opts = {}) {
   const auth = createAuth(db);
@@ -495,7 +495,17 @@ export function createApi(db, opts = {}) {
   const registrationOpen = () => one("SELECT value FROM settings WHERE key='registration_open'")?.value !== '0'
     || one('SELECT COUNT(*) AS n FROM users').n === 0;
 
-  route('GET', '/api/me', ({ user }) => ({ user: user ? meOf(user) : null, registration_open: registrationOpen() }), { public: true });
+  // Users with no role assignment at all (new sign-ups waiting for an admin, or deliberately reset to None).
+  const NO_ROLES = 'NOT EXISTS (SELECT 1 FROM role_assignments r WHERE r.user_id = u.id)';
+  const noRoleCount = () => one(`SELECT COUNT(*) AS n FROM users u WHERE ${NO_ROLES}`).n;
+
+  // setup_required: nobody has registered yet, so the UI shows the "create the administrator" screen
+  // (the first account is always made global Admin, see auth.register).
+  route('GET', '/api/me', ({ user }) => {
+    const me = user ? meOf(user) : null;
+    if (me?.global_role === 'admin') me.pending_users = noRoleCount();
+    return { user: me, setup_required: count('users') === 0, registration_open: registrationOpen(), version: opts.version ?? 'dev' };
+  }, { public: true });
   route('GET', '/api/health', () => ({ ok: true }), { public: true });
   route('PUT', '/api/settings', ({ body, user }) => {
     needGlobalAdmin(user);
@@ -512,6 +522,8 @@ export function createApi(db, opts = {}) {
     return {
       db_bytes: one('PRAGMA page_count').page_count * one('PRAGMA page_size').page_size,
       counts: { tenants: count('tenants'), sites: count('sites'), networks: count('networks'), entries: count('entries'), users: count('users') },
+      version: opts.version ?? 'dev',
+      commit: opts.commit ?? 'unknown',
       node: process.version,
       scan_interval_min: Number(process.env.SCAN_INTERVAL_MIN ?? 15),
       backup_dir: opts.backupDir || null,
@@ -654,9 +666,9 @@ export function createApi(db, opts = {}) {
 
   route('GET', '/api/users', ({ user }) => {
     needGlobalAdmin(user);
-    return all('SELECT id, username, created_at FROM users ORDER BY username COLLATE NOCASE').map((u) => {
+    return all(`SELECT u.id, u.username, u.created_at, ${NO_ROLES} AS no_roles FROM users u ORDER BY u.username COLLATE NOCASE`).map((u) => {
       const r = auth.rolesOf(u.id);
-      return { ...u, global_role: r.global, tenant_roles: r.tenants, site_roles: r.sites };
+      return { ...u, no_roles: !!u.no_roles, global_role: r.global, tenant_roles: r.tenants, site_roles: r.sites };
     });
   });
   // Scope is global (no ids), tenant (tenant_id) or site (site_id). A global role of "none" just removes the assignment.

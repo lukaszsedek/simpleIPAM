@@ -14,6 +14,10 @@ WORKDIR /app
 COPY server/package.json ./
 COPY server/src ./src
 COPY --from=web /web/dist ./public
+# Version info (set by CI from the git tag / commit); shown in the UI. Declared late to keep the layers above cacheable.
+ARG APP_VERSION=dev
+ARG APP_COMMIT=unknown
+ENV APP_VERSION=$APP_VERSION APP_COMMIT=$APP_COMMIT
 VOLUME /data
 EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=3s CMD wget -qO- http://127.0.0.1:8080/api/health >/dev/null || exit 1
