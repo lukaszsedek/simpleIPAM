@@ -1,0 +1,28 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+Home-use IPAM shipped as a single Docker image. UI/UX text is in Polish. Model: tenant → site → network (CIDR, VLAN, gateway, DHCP range, DNS) → entries (IP, FQDN, MAC, type, status, tags).
+
+## Commands
+
+- Server tests: `cd server && npm test` (single file: `node --test test/api.test.js`; name filter: `node --test --test-name-pattern="validation" test/api.test.js`)
+- Run API: `cd server && DB_PATH=../data/ipam.db PORT=8080 npm start`
+- Web dev: `cd web && npm install && npm run dev` (Vite on :5173, proxies `/api` to :8080); build: `npm run build`
+- Image: `docker build -t simpleipam .`
+
+## Architecture
+
+- `server/` — **zero npm dependencies**. Needs Node >= 24 (uses built-in `node:sqlite`). `src/server.js` is HTTP + static serving (SPA fallback to index.html); `src/app.js` holds all routes/validation/business logic behind a `createApi(db)` factory (testable without HTTP: `api(method, path, query, body)`); `src/db.js` owns the schema (created on open, no migrations framework); `src/ip.js` is IPv4/CIDR math. IPv4 only.
+- `web/` — Preact + Vite SPA, hash routing (`#/n/<networkId>`, `#/audit`), plain CSS with theme variables. `api.js` is the only fetch layer. Vite output is copied into the image and served by the Node server.
+- Image is multi-stage (`Dockerfile`); data lives in the `/data` volume. CI (`.github/workflows/ci.yml`) runs tests, builds the image and smoke-tests the running container, then pushes a multi-arch (amd64/arm64) image to GHCR (`ghcr.io/<lowercased repo>`; only on `main`/`v*` tags, PRs just build). The web stage uses `--platform=$BUILDPLATFORM` so arm64 builds don't emulate Vite.
+- Scan (`POST /api/networks/:id/scan`) shells out to `ping`, so the container runs as root and is limited to /22 or smaller.
+- Every mutating route writes an `audit` row via `log()` in `app.js`.
+- IAM: `server/src/auth.js` (scrypt passwords, cookie sessions stored hashed, login throttle, role lookup); route-level checks live in `app.js` via `need(user, siteId, minRole)` / `needGlobalAdmin`. Routes require login unless registered with `{ public: true }`. Role scope is global (`tenant_id` and `site_id` NULL) / tenant / site; the most specific assignment wins (`auth.effective`). First registered user becomes global Admin; registration can be closed via the `settings` table. `handle()` takes a `ctx` (`token`, `ip` in; `newToken`/`clearToken` out) which `server.js` maps to the `sid` cookie — tests use that to simulate browsers (see `client()` in `test/api.test.js`).
+- Web: `App.jsx` gates on `me` (from `/api/me`) and shows `Auth.jsx` when logged out; UI hides actions by `site.role` / `network.role` / `me.global_role`, but the server is the source of truth.
+- `server/src/cli.js reset-admin` (password recovery), `backup.js` (VACUUM INTO snapshots, local files, cloud config in `settings.backup_config`, `runBackup`/`runDailyIfDue`), `s3.js` (hand-written SigV4 PutObject; verified against the AWS-documented signatures in `test/backup.test.js`) and `gcs.js` (service-account JWT + media upload) — no SDKs, `fetch` is injectable for tests, `/api/health` is the Docker healthcheck (public; every other `/api` route needs a session).
+- `GET /api/networks/:id/issues` computes consistency warnings on the fly; DNS/DHCP exports are the `EXPORTS` table in `app.js`.
+- API tokens (`api_tokens`, `Authorization: Bearer`) resolve to the owner's roles in `handle()`; token/password management is session-only (`sessionOnly`). `createApi(db, { ping })` lets tests inject a fake pinger; `handle.runScheduledScans()` is driven by a timer in `server.js` (`SCAN_INTERVAL_MIN`) for networks with `auto_scan=1` and feeds `entries.last_seen` / the `discovered` table.
+- Schema changes to existing tables need an upgrade path in `db.js` (`migrateToTenants` rebuilds tables and writes `<db>.pre-tenants.bak`; `addColumn` handles plain additions) — deployed volumes outlive code, so never assume a fresh DB. `test/migrate.test.js` holds the pre-tenant DDL.
+- Admin UI lives in `web/src/Admin.jsx` (tabs under `#/admin/<tab>`; `#/users` and `#/audit` are legacy aliases). Cloud secrets are write-only through the API (`publicConfig` strips them); blank secret fields on save mean "keep".
+- Restore is two-step in `app.js` (`/api/admin/restore/inspect` stages + validates via `restore.js`, migrating old schemas on the staged copy; `/apply` writes a safety backup, then `db.swapFile()` replaces the file under the live handle and clears `sessions`). `db.js` exports a `Database` wrapper (not a bare `DatabaseSync`) precisely so the file can be swapped; keep using only `prepare`/`exec`/`close` on it. Raw DB uploads go through `RAW_PATHS` in `server.js`.
