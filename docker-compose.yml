@@ -1,0 +1,12 @@
+services:
+  ipam:
+    image: ghcr.io/lukaszsedek/simpleipam:latest
+    build: .
+    ports:
+      - "8080:8080"
+    volumes:
+      - ipam-data:/data
+    restart: unless-stopped
+
+volumes:
+  ipam-data:
