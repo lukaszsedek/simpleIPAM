@@ -10,7 +10,7 @@ import { bump, compare } from './semver.mjs';
 const args = process.argv.slice(2);
 const dry = args.includes('--dry-run');
 const target = args.find((a) => !a.startsWith('--'));
-const sh = (cmd, a, opts = {}) => execFileSync(cmd, a, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'], ...opts }).trim();
+const sh = (cmd, a, opts = {}) => execFileSync(cmd, a, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'], ...opts })?.trim();
 const die = (m) => { console.error(`✖ ${m}`); process.exit(1); };
 const json = (p) => JSON.parse(readFileSync(p, 'utf8'));
 const save = (p, o) => writeFileSync(p, `${JSON.stringify(o, null, 2)}\n`);
