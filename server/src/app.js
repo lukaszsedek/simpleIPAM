@@ -3,7 +3,8 @@ import { execFile } from 'node:child_process';
 
 import { HttpError } from './errors.js';
 import { createAuth, RANK, ROLES } from './auth.js';
-import { snapshotBuffer, backupName, listLocal, isBackupName, loadConfig, saveConfig, publicConfig, runBackup, runDailyIfDue, lastBackup, testRemote } from './backup.js';
+import { snapshotBuffer, backupName, listLocal, isBackupName, loadConfig, saveConfig, publicConfig, runBackup, runDailyIfDue, lastBackup, testRemote, setGdriveAuth } from './backup.js';
+import * as gd from './gdrive.js';
 import { readFileSync, rmSync, existsSync, writeFileSync, copyFileSync, mkdirSync, readdirSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import { summarize, validateAndPrepare } from './restore.js';
@@ -556,6 +557,87 @@ export function createApi(db, opts = {}) {
     try { await testRemote(loadConfig(db), bdeps()); return { ok: true }; }
     catch (e) { return { ok: false, message: String(e.message).slice(0, 300) }; }
   });
+  // ---------- Google Drive: one-time OAuth consent ----------
+  // Redirect flow: the browser goes to Google and returns to /callback. Device flow: the user types a short code at
+  // google.com/device; needed when the app is reached over plain http on a LAN address, which Google refuses as a redirect URI.
+  const gdPending = new Map();   // state -> { verifier, redirectUri, expires }
+  let gdDevice = null;           // { device_code, expires }
+  const gdCfg = () => {
+    const c = loadConfig(db).gdrive;
+    if (!c.client_id || !c.client_secret) throw bad('Najpierw zapisz Client ID i Client Secret z Google Cloud');
+    return c;
+  };
+  const gdCfgConnected = () => {
+    const c = gdCfg();
+    if (!c.refresh_token) throw bad('Konto Google nie jest połączone');
+    return c;
+  };
+  const gdFetch = () => ({ fetch: opts.fetch });
+  const gdFail = (e) => { if (e instanceof gd.GoogleError) throw bad(e.message); throw e; };
+
+  route('POST', '/api/admin/backups/gdrive/connect', ({ body, user, ctx }) => {
+    needGlobalAdmin(user); sessionOnly(ctx);
+    const cfg = gdCfg();
+    let origin;
+    try { origin = new URL(String(body.origin)); } catch { throw bad('Nieprawidłowy adres aplikacji'); }
+    if (!/^https?:$/.test(origin.protocol)) throw bad('Nieprawidłowy adres aplikacji');
+    const redirectUri = `${origin.origin}/api/admin/backups/gdrive/callback`;
+    for (const [k, v] of gdPending) if (v.expires < Date.now()) gdPending.delete(k);
+    const state = randomBytes(24).toString('base64url');
+    const { verifier, challenge } = gd.newPkce();
+    gdPending.set(state, { verifier, redirectUri, expires: Date.now() + 10 * 60_000 });
+    return { url: gd.authUrl({ clientId: cfg.client_id, redirectUri, state, challenge }), redirect_uri: redirectUri };
+  });
+  route('GET', '/api/admin/backups/gdrive/callback', async ({ user, ctx, query }) => {
+    needGlobalAdmin(user); sessionOnly(ctx);
+    const back = (r) => ({ redirect: `/#/admin/backups?gdrive=${encodeURIComponent(r)}` });
+    const p = gdPending.get(query.state);
+    gdPending.delete(query.state);
+    if (!p || p.expires < Date.now()) return back('state');
+    if (query.error || !query.code) return back('denied');
+    try {
+      const t = await gd.exchangeCode(gdCfg(), { code: query.code, redirectUri: p.redirectUri, verifier: p.verifier }, gdFetch());
+      setGdriveAuth(db, t);
+      log('update', 'settings', `Dysk Google połączony (${t.email || 'konto'})`);
+      return back('ok');
+    } catch { return back('error'); }
+  });
+  route('POST', '/api/admin/backups/gdrive/device/start', async ({ user, ctx }) => {
+    needGlobalAdmin(user); sessionOnly(ctx);
+    try {
+      const d = await gd.startDevice(gdCfg(), gdFetch());
+      gdDevice = { device_code: d.device_code, expires: Date.now() + d.expires_in * 1000 };
+      return { user_code: d.user_code, verification_url: d.verification_url, interval: d.interval, expires_in: d.expires_in };
+    } catch (e) { gdFail(e); }
+  });
+  route('POST', '/api/admin/backups/gdrive/device/poll', async ({ user, ctx }) => {
+    needGlobalAdmin(user); sessionOnly(ctx);
+    if (!gdDevice || gdDevice.expires < Date.now()) { gdDevice = null; return { status: 'expired' }; }
+    try {
+      const r = await gd.pollDevice(gdCfg(), gdDevice.device_code, gdFetch());
+      if (r.status === 'connected') {
+        gdDevice = null;
+        setGdriveAuth(db, r);
+        log('update', 'settings', `Dysk Google połączony (${r.email || 'konto'})`);
+        return { status: 'connected', email: r.email };
+      }
+      if (r.status === 'denied' || r.status === 'expired') gdDevice = null;
+      return { status: r.status };
+    } catch (e) { gdDevice = null; gdFail(e); }
+  });
+  route('GET', '/api/admin/backups/gdrive/files', async ({ user }) => {
+    needGlobalAdmin(user);
+    try { return { files: await gd.listDrive(gdCfgConnected(), gdFetch()) }; } catch (e) { gdFail(e); }
+  });
+  route('POST', '/api/admin/backups/gdrive/disconnect', async ({ user, ctx }) => {
+    needGlobalAdmin(user); sessionOnly(ctx);
+    const { refresh_token } = loadConfig(db).gdrive;
+    if (refresh_token) await gd.revoke(refresh_token, gdFetch());
+    setGdriveAuth(db, {});
+    log('update', 'settings', 'Dysk Google odłączony');
+    return publicConfig(loadConfig(db));
+  });
+
   // ---------- restore ----------
   // Step 1 (inspect) validates a file and stages it next to the database; step 2 (apply) swaps it in.
   const STAGE_TTL_MS = 15 * 60_000;
@@ -567,7 +649,7 @@ export function createApi(db, opts = {}) {
   const dropStaged = (t) => { const e = staged.get(t); if (e) { rmSync(e.path, { force: true }); staged.delete(t); } };
   const sweepStaged = () => { for (const [t, e] of staged) if (e.expires < Date.now()) dropStaged(t); };
 
-  route('POST', '/api/admin/restore/inspect', ({ body, user, ctx }) => {
+  route('POST', '/api/admin/restore/inspect', async ({ body, user, ctx }) => {
     needGlobalAdmin(user);
     sessionOnly(ctx);
     if (db.path === ':memory:') throw bad('Przywracanie jest niedostępne dla bazy w pamięci');
@@ -580,6 +662,12 @@ export function createApi(db, opts = {}) {
       if (!body.file.length) throw bad('Plik jest pusty');
       writeFileSync(path, body.file);
       label = 'przesłany plik';
+    } else if (body.drive_id) {
+      try {
+        const d = await gd.downloadDrive(gdCfgConnected(), String(body.drive_id), gdFetch());
+        writeFileSync(path, d.data);
+        label = `Dysk Google: ${d.name}`;
+      } catch (e) { gdFail(e); }
     } else {
       copyFileSync(localFile(String(body.name ?? '')), path);
       label = body.name;

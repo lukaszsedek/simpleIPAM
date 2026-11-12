@@ -8,7 +8,7 @@ Lekki IPAM do użytku domowego. Hierarchia: **tenant** (rodzina, firma…) → *
 - logowanie i rejestracja, role **Admin / Contributor / Reader / None** nadawane globalnie, per tenant lub per lokalizacja
 - wykrywanie konfliktów (duplikaty MAC/FQDN, wpisy w puli DHCP, nakładające się sieci), eksport hosts / dnsmasq / BIND
 - panel administratora (użytkownicy, kopie zapasowe, ustawienia, dziennik zmian)
-- kopie zapasowe: pobieranie, przywracanie z UI (z podglądem i kopią bezpieczeństwa), dzienna kopia lokalna oraz wysyłka do **AWS S3** (i zgodnych: MinIO, R2, Backblaze) lub **Google Cloud Storage**
+- kopie zapasowe: pobieranie, przywracanie z UI (z podglądem i kopią bezpieczeństwa), dzienna kopia lokalna oraz wysyłka do **AWS S3** (i zgodnych: MinIO, R2, Backblaze) **Google Cloud Storage** lub **Dysk Google** (jednorazowe logowanie przyciskiem)
 - tokeny API (Bearer), zbiorcza edycja i sortowanie, szukanie wolnych podsieci, skan okresowy z listą nowych urządzeń i „ostatnio widziany”
 - jeden kontener, wbudowana baza SQLite (`/data/ipam.db`), zero zależności npm w backendzie
 
@@ -105,6 +105,7 @@ Panel administratora → **Kopie zapasowe**:
 - **Chmura** — wybierz dostawcę, podaj dane dostępowe i włącz „Wysyłaj codzienną kopię automatycznie”. Przycisk **Testuj połączenie** wysyła mały plik `simpleipam-connection-test.txt`.
   - *S3*: bucket, region, Access Key i Secret. Dla MinIO/R2/Backblaze podaj też własny endpoint.
   - *GCS*: bucket i klucz JSON konta usługi (rola z zapisem obiektów, np. Storage Object Creator).
+  - *Dysk Google*: w Google Cloud Console włącz Drive API, utwórz identyfikator klienta OAuth i wpisz Client ID/Secret w aplikacji, potem kliknij **Połącz z Google**. Aplikacja dostaje tylko zakres `drive.file` (widzi wyłącznie własny folder z kopiami). Adres przekierowania to `<adres aplikacji>/api/admin/backups/gdrive/callback` i Google przyjmuje tylko `https://` lub `localhost`; przy adresie typu `http://192.168.x.x` użyj klienta „Telewizory i urządzenia o ograniczonym wejściu” oraz przycisku **Połącz kodem urządzenia**. Aplikację OAuth ustaw w trybie „In production”, bo w „Testing” token wygasa po 7 dniach.
 - Aplikacja tylko **wysyła** pliki — retencję ustaw regułami cyklu życia bucketa. Kluczowi nadaj minimalne uprawnienia.
 - Klucze dostępu są zapisane w bazie (API nigdy ich nie zwraca), więc trafiają też do kopii. Traktuj kopie jak dane poufne.
 

@@ -5,6 +5,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+### Added
+- Google Drive as a backup destination: one-time "Connect with Google" sign-in (OAuth 2.0 authorization code + PKCE, or device code for LAN/http installs), `drive.file` scope only, own folder, retention of the newest N backups.
+- Restore from a backup stored in Google Drive (list + "Przywróć" button); the per-file restore buttons in the local list now carry a label.
+
 ## [0.1.0] - 2026-11-12
 
 First release.

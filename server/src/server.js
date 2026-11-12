@@ -111,7 +111,10 @@ createServer(async (req, res) => {
       const out = await api(req.method, url.pathname, Object.fromEntries(url.searchParams), body, ctx);
       const headers = {};
       if (ctx.newToken || ctx.clearToken) headers['set-cookie'] = sessionCookie(req, ctx.newToken);
-      if (out?.raw !== undefined) {
+      if (out?.redirect) {
+        res.writeHead(302, { ...headers, location: out.redirect });
+        res.end();
+      } else if (out?.raw !== undefined) {
         res.writeHead(200, { ...headers, 'content-type': out.contentType, 'content-disposition': `attachment; filename="${out.filename}"` });
         res.end(out.raw);
       } else {
