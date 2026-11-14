@@ -5,6 +5,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-11-14
+
 ### Added
 - The interface is available in **Polish, English and German**. The language follows the browser by default and can be switched in the profile menu or on the sign-in screen; messages from the server (errors, "To review") are translated too.
 
