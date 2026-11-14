@@ -68,6 +68,7 @@ export const api = {
   unifi: () => req('GET', '/api/admin/unifi'),
   saveUnifi: (c) => req('PUT', '/api/admin/unifi', c),
   unifiDiscover: () => req('POST', '/api/admin/unifi/discover', {}),
+  unifiDiagnose: () => req('POST', '/api/admin/unifi/diagnose', {}),
   unifiSync: (dry_run) => req('POST', '/api/admin/unifi/sync', { dry_run }),
   testRemote: () => req('POST', '/api/admin/backups/test-remote', {}),
   delBackup: (name) => req('DELETE', `/api/admin/backups/${encodeURIComponent(name)}`),

@@ -178,6 +178,8 @@ function openRaw(path) {
     if (!db.prepare(`PRAGMA table_info(${table})`).all().some((c) => c.name === col)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${col} ${ddl}`);
   };
   addColumn('entries', 'last_seen', 'TEXT');
+  addColumn('entries', 'alias', "TEXT NOT NULL DEFAULT ''");        // friendly device name (mirrors the UniFi client alias)
+  addColumn('entries', 'unifi_name', "TEXT NOT NULL DEFAULT ''");    // alias as last seen in UniFi: the base for detecting who changed it
   addColumn('entries', 'seen_mac', "TEXT NOT NULL DEFAULT ''");   // MAC last observed by a scan
   addColumn('entries', 'mac_ack', "TEXT NOT NULL DEFAULT ''");     // observed MAC the user chose to ignore
   addColumn('discovered', 'name', "TEXT NOT NULL DEFAULT ''");   // device name reported by an integration (UniFi)

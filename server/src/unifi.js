@@ -96,3 +96,12 @@ export function toClient(c) {
 
 // Hostname-like names become the FQDN; anything else ("Łukasz's iPhone") stays a description.
 export const hostnameOf = (name) => (/^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/i.test(name) ? name.toLowerCase() : '');
+
+// Read-only capability probe: what does this key get from the console? (No writes are ever made here.)
+export async function probe(cfg, host, path, { fetch = globalThis.fetch } = {}) {
+  try {
+    const res = await fetch(`${BASE}/v1/connector/consoles/${encodeURIComponent(host)}/proxy/network${path}`, { headers: { 'x-api-key': cfg.api_key, accept: 'application/json' }, signal: AbortSignal.timeout(30_000) });
+    const body = await res.json().catch(() => null);
+    return { status: res.status, ok: res.ok, count: Array.isArray(body?.data) ? body.data.length : null };
+  } catch (e) { return { status: 0, ok: false, count: null, error: short(e.message) }; }
+}

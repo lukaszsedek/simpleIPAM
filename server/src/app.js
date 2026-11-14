@@ -111,11 +111,11 @@ export function createApi(db, opts = {}) {
     const tags = str(b.tags, 200).split(',').map((t) => t.trim().toLowerCase()).filter(Boolean).join(',');
     const dup = one('SELECT id FROM entries WHERE network_id=? AND ip=?', net.id, ip);
     if (dup && dup.id !== existingId) throw new HttpError(409, `Adres ${ip} jest już wpisany w tej sieci`);
-    return { ip, ip_num: n, fqdn, mac, type, status, tags, description: str(b.description) };
+    return { ip, ip_num: n, fqdn, alias: str(b.alias, 100), mac, type, status, tags, description: str(b.description) };
   }
 
   // ---------- entry history ----------
-  const FIELDS = ['ip', 'fqdn', 'mac', 'type', 'status', 'tags', 'description'];
+  const FIELDS = ['ip', 'fqdn', 'alias', 'mac', 'type', 'status', 'tags', 'description'];
   const hist = (netId, entryId, ip, action, changes, who = actor) => {
     if (!Object.keys(changes).length) return;
     run('INSERT INTO entry_history (network_id, entry_id, ip, action, changes, actor) VALUES (?,?,?,?,?,?)', netId, entryId, ip, action, JSON.stringify(changes), who);
@@ -184,7 +184,7 @@ export function createApi(db, opts = {}) {
   }
 
   // ---------- csv ----------
-  const CSV_COLS = ['ip', 'fqdn', 'mac', 'type', 'status', 'tags', 'description'];
+  const CSV_COLS = ['ip', 'fqdn', 'mac', 'type', 'status', 'tags', 'description', 'alias'];
   const csvCell = (v) => /[",\n]/.test(String(v)) ? `"${String(v).replace(/"/g, '""')}"` : String(v);
   function parseCsv(text) {
     const rows = []; let row = []; let cell = ''; let q = false;
@@ -333,8 +333,8 @@ export function createApi(db, opts = {}) {
     const net = must(one('SELECT * FROM networks WHERE id=?', params.id), 'Sieć');
     need(user, net.site_id, 'contributor');
     const e = entryInput(body, net);
-    const r = run(`INSERT INTO entries (network_id, ip, ip_num, fqdn, mac, type, status, tags, description)
-      VALUES (?,?,?,?,?,?,?,?,?)`, net.id, e.ip, e.ip_num, e.fqdn, e.mac, e.type, e.status, e.tags, e.description);
+    const r = run(`INSERT INTO entries (network_id, ip, ip_num, fqdn, alias, mac, type, status, tags, description)
+      VALUES (?,?,?,?,?,?,?,?,?,?)`, net.id, e.ip, e.ip_num, e.fqdn, e.alias, e.mac, e.type, e.status, e.tags, e.description);
     const seen = one('SELECT mac FROM discovered WHERE network_id=? AND ip=?', net.id, e.ip)?.mac ?? '';
     run('DELETE FROM discovered WHERE network_id=? AND ip=?', net.id, e.ip);
     if (seen) run('UPDATE entries SET seen_mac=? WHERE id=?', seen, r.lastInsertRowid);
@@ -347,8 +347,9 @@ export function createApi(db, opts = {}) {
     const net = one('SELECT * FROM networks WHERE id=?', old.network_id);
     need(user, net.site_id, 'contributor');
     const e = entryInput(body, net, old.id);
-    run(`UPDATE entries SET ip=?, ip_num=?, fqdn=?, mac=?, type=?, status=?, tags=?, description=?,
-      updated_at=datetime('now') WHERE id=?`, e.ip, e.ip_num, e.fqdn, e.mac, e.type, e.status, e.tags, e.description, old.id);
+    if (body.alias === undefined) e.alias = old.alias;                      // API clients that do not know the field keep it
+    run(`UPDATE entries SET ip=?, ip_num=?, fqdn=?, alias=?, mac=?, type=?, status=?, tags=?, description=?,
+      updated_at=datetime('now') WHERE id=?`, e.ip, e.ip_num, e.fqdn, e.alias, e.mac, e.type, e.status, e.tags, e.description, old.id);
     hist(old.network_id, old.id, e.ip, 'update', diff(old, e));
     log('update', 'entry', `${e.ip} ${e.fqdn}`.trim());
     return { id: old.id, network_id: old.network_id, ...e };
@@ -399,8 +400,8 @@ export function createApi(db, opts = {}) {
     return all(`SELECT e.*, n.name AS network_name, n.cidr, n.vlan, s.name AS site_name, s.id AS site_id, (SELECT name FROM tenants WHERE id=s.tenant_id) AS tenant_name
       FROM entries e JOIN networks n ON n.id=e.network_id JOIN sites s ON s.id=n.site_id
       WHERE s.id IN (${sites.join(',')})
-        AND (e.ip LIKE ? OR e.fqdn LIKE ? OR e.mac LIKE ? OR e.tags LIKE ? OR e.description LIKE ?)
-      ORDER BY s.name, e.ip_num LIMIT 50`, like, like, like, like, like);
+        AND (e.ip LIKE ? OR e.fqdn LIKE ? OR e.alias LIKE ? OR e.mac LIKE ? OR e.tags LIKE ? OR e.description LIKE ?)
+      ORDER BY s.name, e.ip_num LIMIT 50`, like, like, like, like, like, like);
   });
 
   route('GET', '/api/audit', ({ user }) => (needGlobalAdmin(user), all('SELECT * FROM audit ORDER BY id DESC LIMIT 200')));
@@ -428,13 +429,14 @@ export function createApi(db, opts = {}) {
           const existing = one('SELECT * FROM entries WHERE network_id=? AND ip=?', net.id, str(obj.ip, 15));
           const e = entryInput(obj, net, existing?.id);
           if (existing) {
-            run(`UPDATE entries SET fqdn=?, mac=?, type=?, status=?, tags=?, description=?, updated_at=datetime('now') WHERE id=?`,
-              e.fqdn, e.mac, e.type, e.status, e.tags, e.description, existing.id);
+            if (!head.includes('alias')) e.alias = existing.alias;                 // partial CSVs do not wipe it
+            run(`UPDATE entries SET fqdn=?, alias=?, mac=?, type=?, status=?, tags=?, description=?, updated_at=datetime('now') WHERE id=?`,
+              e.fqdn, e.alias, e.mac, e.type, e.status, e.tags, e.description, existing.id);
             hist(net.id, existing.id, e.ip, 'update', diff(existing, e));
             updated++;
           } else {
-            const ins = run(`INSERT INTO entries (network_id, ip, ip_num, fqdn, mac, type, status, tags, description) VALUES (?,?,?,?,?,?,?,?,?)`,
-              net.id, e.ip, e.ip_num, e.fqdn, e.mac, e.type, e.status, e.tags, e.description);
+            const ins = run(`INSERT INTO entries (network_id, ip, ip_num, fqdn, alias, mac, type, status, tags, description) VALUES (?,?,?,?,?,?,?,?,?,?)`,
+              net.id, e.ip, e.ip_num, e.fqdn, e.alias, e.mac, e.type, e.status, e.tags, e.description);
             hist(net.id, Number(ins.lastInsertRowid), e.ip, 'create', snapshot(e, 'new'));
             added++;
           }
@@ -1030,6 +1032,22 @@ export function createApi(db, opts = {}) {
     } catch (e) { uFail(e); }
   });
 
+  // Before any write-back is built: can this API key even reach the classic Network API (where client aliases live)?
+  route('POST', '/api/admin/unifi/diagnose', async ({ user, ctx }) => {
+    needGlobalAdmin(user); sessionOnly(ctx);
+    const c = unifiCfg();
+    if (!c.api_key) throw bad('Najpierw zapisz klucz API');
+    const cons = c.consoles.filter((x) => x.enabled);
+    if (!cons.length) throw bad('Zaznacz co najmniej jedną konsolę');
+    const results = [];
+    for (const con of cons) {
+      const integration = await unifi.probe(c, con.id, '/integration/v1/sites', uDeps());
+      const legacy = await unifi.probe(c, con.id, '/api/self/sites', uDeps());
+      results.push({ console: con.name, integration, legacy });
+    }
+    return { results };
+  });
+
   // Reads everything for one console (awaits happen here), then applies it in a single synchronous transaction.
   async function unifiFetchConsole(c, con) {
     const sites = await unifi.listSites(c, con.id, uDeps());
@@ -1049,7 +1067,7 @@ export function createApi(db, opts = {}) {
 
   function unifiApply(c, fetched, dry) {
     const who = 'unifi';
-    const sum = { console: fetched.con.name, sites: 0, networks: { created: 0, updated: 0, skipped: 0 }, entries: { created: 0, updated: 0, pooled: 0, skipped: 0 }, errors: [] };
+    const sum = { console: fetched.con.name, sites: 0, networks: { created: 0, updated: 0, skipped: 0 }, entries: { created: 0, updated: 0, pooled: 0, skipped: 0 }, aliases: { updated: 0, conflicts: 0 }, errors: [] };
     for (const { site, nets, clients } of fetched.sites) {
       sum.sites++;
       const siteName = (fetched.sites.length > 1 ? `${fetched.con.name} / ${site.name}` : fetched.con.name).slice(0, 80);
@@ -1085,7 +1103,20 @@ export function createApi(db, opts = {}) {
         const e = net.id ? one('SELECT * FROM entries WHERE network_id=? AND ip=?', net.id, cl.ip) : null;
         if (e) {
           sum.entries.updated++;
-          if (!dry) { run("UPDATE entries SET last_seen=datetime('now') WHERE id=?", e.id); observeMac(e, mac, who); }
+          const name = cl.name.slice(0, 100);
+          // Three-way alias merge against the name UniFi had at the last sync (unifi_name):
+          // only UniFi changed -> take it; only simpleIPAM changed -> keep it; both changed -> simpleIPAM wins.
+          const unifiChanged = name !== e.unifi_name;
+          const ipamUntouched = e.alias === e.unifi_name || e.alias === '';
+          const takes = unifiChanged && ipamUntouched && name !== e.alias;
+          if (unifiChanged && !ipamUntouched && name !== e.alias) sum.aliases.conflicts++;
+          if (takes) sum.aliases.updated++;
+          if (!dry) {
+            run("UPDATE entries SET last_seen=datetime('now') WHERE id=?", e.id);
+            observeMac(e, mac, who);
+            if (unifiChanged) run('UPDATE entries SET unifi_name=? WHERE id=?', name, e.id);
+            if (takes) { run("UPDATE entries SET alias=?, updated_at=datetime('now') WHERE id=?", name, e.id); hist(net.id, e.id, e.ip, 'update', { alias: [e.alias, name] }, who); }
+          }
         } else if (inPool(net, cl.ip) && !c.import_dhcp) {
           sum.entries.pooled++;
           if (!dry && net.id) run(`INSERT INTO discovered (network_id, ip, mac, name) VALUES (?,?,?,?)
@@ -1093,10 +1124,12 @@ export function createApi(db, opts = {}) {
         } else {
           sum.entries.created++;
           if (dry || !net.id) continue;
-          const entry = { ip: cl.ip, fqdn: unifi.hostnameOf(cl.name), mac, type: 'other', status: 'used', tags: ['unifi', cl.wifi ? 'wifi' : 'lan'].join(','), description: unifi.hostnameOf(cl.name) ? '' : cl.name.slice(0, 200) };
-          const dupFqdn = entry.fqdn && one('SELECT 1 FROM entries e JOIN networks n ON n.id=e.network_id WHERE n.site_id=? AND e.fqdn=?', ipamSite.id, entry.fqdn);
-          const r = run(`INSERT INTO entries (network_id, ip, ip_num, fqdn, mac, type, status, tags, description, last_seen) VALUES (?,?,?,?,?,?,?,?,?,datetime('now'))`,
-            net.id, entry.ip, ipToInt(entry.ip), dupFqdn ? '' : entry.fqdn, mac, entry.type, entry.status, entry.tags, dupFqdn ? cl.name.slice(0, 200) : entry.description);
+          const alias = cl.name.slice(0, 100);
+          const fqdn = unifi.hostnameOf(cl.name);
+          const dupFqdn = fqdn && one('SELECT 1 FROM entries e JOIN networks n ON n.id=e.network_id WHERE n.site_id=? AND e.fqdn=?', ipamSite.id, fqdn);
+          const entry = { ip: cl.ip, fqdn: dupFqdn ? '' : fqdn, alias, mac, type: 'other', status: 'used', tags: ['unifi', cl.wifi ? 'wifi' : 'lan'].join(','), description: '' };
+          const r = run(`INSERT INTO entries (network_id, ip, ip_num, fqdn, alias, unifi_name, mac, type, status, tags, description, last_seen) VALUES (?,?,?,?,?,?,?,?,?,?,?,datetime('now'))`,
+            net.id, entry.ip, ipToInt(entry.ip), entry.fqdn, alias, alias, mac, entry.type, entry.status, entry.tags, entry.description);
           hist(net.id, Number(r.lastInsertRowid), entry.ip, 'create', snapshot({ ...entry, mac }, 'new'), who);
         }
       }

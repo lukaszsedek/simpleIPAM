@@ -66,7 +66,7 @@ function SyncResult({ r }) {
       <div><b>{r.dry ? 'Podgląd (nic nie zapisano)' : r.ok ? 'Ostatnia synchronizacja' : 'Synchronizacja z błędami'}</b> · {when(r.at)}</div>
       {r.results.map((c) => (
         <div class="small-text">
-          <b>{c.console}</b>: {c.errors.length && !c.sites ? '' : `sieci +${c.networks.created} ~${c.networks.updated}, wpisy +${c.entries.created} ~${c.entries.updated}, z puli DHCP ${c.entries.pooled}, pominięte ${c.entries.skipped}`}
+          <b>{c.console}</b>: {c.errors.length && !c.sites ? '' : `sieci +${c.networks.created} ~${c.networks.updated}, wpisy +${c.entries.created} ~${c.entries.updated}, z puli DHCP ${c.entries.pooled}, pominięte ${c.entries.skipped}, aliasy z UniFi ${c.aliases?.updated ?? 0}${c.aliases?.conflicts ? `, konflikty aliasów (wygrywa IPAM) ${c.aliases.conflicts}` : ''}`}
           {c.errors.map((e) => <div class="error-text">{e}</div>)}
         </div>
       ))}
@@ -79,6 +79,7 @@ function Unifi({ tenants, notify }) {
   const [key, setKey] = useState('');
   const [busy, setBusy] = useState('');
   const [res, setRes] = useState(null);
+  const [diag, setDiag] = useState(null);
   useEffect(() => { api.unifi().then((r) => { setC(r); setRes(r.last); }).catch((e) => notify(e.message, 'error')); }, []);
   if (!c) return null;
   const act = async (name, fn, done) => {
@@ -120,9 +121,22 @@ function Unifi({ tenants, notify }) {
           <label class="toggle"><input type="checkbox" checked={c.import_dhcp} onChange={(e) => patch({ import_dhcp: e.target.checked })} /> Klienci z puli DHCP też jako wpisy (domyślnie trafiają do „nowych urządzeń”)</label>
           <label class="toggle"><input type="checkbox" checked={c.auto_sync} onChange={(e) => patch({ auto_sync: e.target.checked })} /> Synchronizuj automatycznie co godzinę</label>
           <div class="form-actions">
+            <button class="btn ghost" disabled={!ready || !!busy} onClick={() => act('diag', api.unifiDiagnose, setDiag)} title="Tylko odczyt — sprawdza, czy klucz dosięga klasycznego API, gdzie UniFi trzyma aliasy klientów">{busy === 'diag' ? 'Sprawdzam…' : 'Sprawdź zapis do UniFi'}</button>
             <button class="btn ghost" disabled={!ready || !!busy} onClick={() => sync(true)}>{busy === 'dry' ? 'Liczę…' : 'Podgląd'}</button>
             <button class="btn primary" disabled={!ready || !!busy} onClick={() => sync(false)}>{busy === 'sync' ? 'Synchronizuję…' : 'Synchronizuj teraz'}</button>
           </div>
+        </div>
+      )}
+      {diag && (
+        <div class="last-run">
+          <div><b>Dostęp klucza do konsol</b> (tylko odczyt, nic nie zostało zmienione)</div>
+          {diag.results.map((d) => (
+            <div class="small-text">
+              <b>{d.console}</b>: Integration API {d.integration.ok ? '✔ działa' : `✖ ${d.integration.status || d.integration.error}`} · klasyczne API (aliasy) {d.legacy.ok ? '✔ odczyt działa' : `✖ ${d.legacy.status || d.legacy.error}`}
+              {!d.legacy.ok && d.legacy.status > 0 && <div class="muted">Ten klucz nie ma dostępu do klasycznego API — zapisu aliasów z IPAM do UniFi nie da się nim zrobić.</div>}
+              {d.legacy.ok && <div class="muted">Odczyt działa, więc zapis aliasów jest prawdopodobnie możliwy; potwierdzi to dopiero faktyczna próba zapisu.</div>}
+            </div>
+          ))}
         </div>
       )}
       {res && <SyncResult r={res} />}

@@ -24,8 +24,8 @@ const D = {
   'POST /api/discovered/:id/dismiss': ['Sieci', 'Ukryj znaleziony host', 'contributor'],
   'GET /api/sites/:id/free-blocks': ['Sieci', 'Wolne bloki CIDR w lokalizacji', 'reader', { query: { within: 'string* (CIDR nadrzędny)', prefix: 'integer* (żądana długość prefiksu)' } }],
   // --- entries ---
-  'POST /api/networks/:id/entries': ['Wpisy', 'Dodaj wpis (adres IP)', 'contributor', { body: { ip: 'string* (w CIDR sieci)', fqdn: 'string', mac: 'string', type: 'server|vm|container|router|switch|ap|iot|printer|pc|phone|nas|other', status: 'used|reserved|free', tags: 'string (po przecinku)', description: 'string' } }],
-  'PUT /api/entries/:id': ['Wpisy', 'Zmień wpis', 'contributor', { body: { ip: 'string*', fqdn: 'string', mac: 'string', type: 'string', status: 'used|reserved|free', tags: 'string', description: 'string' } }],
+  'POST /api/networks/:id/entries': ['Wpisy', 'Dodaj wpis (adres IP)', 'contributor', { body: { ip: 'string* (w CIDR sieci)', fqdn: 'string', alias: 'string (przyjazna nazwa urządzenia; zgodna z aliasem w UniFi)', mac: 'string', type: 'server|vm|container|router|switch|ap|iot|printer|pc|phone|nas|other', status: 'used|reserved|free', tags: 'string (po przecinku)', description: 'string' } }],
+  'PUT /api/entries/:id': ['Wpisy', 'Zmień wpis', 'contributor', { body: { ip: 'string*', fqdn: 'string', alias: 'string (pominięte = bez zmian)', mac: 'string', type: 'string', status: 'used|reserved|free', tags: 'string', description: 'string' } }],
   'DELETE /api/entries/:id': ['Wpisy', 'Usuń wpis', 'contributor'],
   'POST /api/networks/:id/entries/bulk': ['Wpisy', 'Zbiorcza zmiana lub usunięcie wpisów (do 1000)', 'contributor', { body: { ids: 'integer[]*', action: 'delete|update*', changes: 'object ({ type, status, add_tags } — dla action=update)' } }],
   'GET /api/search': ['Wpisy', 'Szukaj wpisów po IP, FQDN, MAC, tagach', 'reader', { query: { q: 'string*' } }],
@@ -79,6 +79,7 @@ const D = {
   'PUT /api/admin/unifi': ['UniFi', 'Zapisz klucz API Site Managera, tenanta docelowego i wybór konsol', 'session', { body: { api_key: 'string (nowy klucz z unifi.ui.com)', tenant_id: 'integer', consoles: 'object[] ([{ id, enabled }])', import_dhcp: 'boolean (klienci z puli DHCP jako wpisy)', auto_sync: 'boolean (co godzinę)' } }],
   'POST /api/admin/unifi/discover': ['UniFi', 'Pobierz listę konsol (hostów) z konta Ubiquiti', 'session'],
   'POST /api/admin/unifi/sync': ['UniFi', 'Synchronizuj UniFi → simpleIPAM (jednokierunkowo). dry_run=true tylko pokazuje, co by się stało', 'session', { body: { dry_run: 'boolean' } }],
+  'POST /api/admin/unifi/diagnose': ['UniFi', 'Tylko odczyt: sprawdź, do jakich API konsoli (Integration i klasyczne) ma dostęp klucz — warunek ewentualnego zapisu aliasów do UniFi', 'session'],
   // --- meta ---
   'GET /api/openapi.json': ['Dokumentacja', 'Ten opis API w formacie OpenAPI 3', 'public'],
   'GET /api/docs': ['Dokumentacja', 'Czytelna dokumentacja API (HTML)', 'public'],

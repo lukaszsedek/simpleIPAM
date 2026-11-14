@@ -96,7 +96,7 @@ test('sync: creates site + networks, static clients become entries, pool clients
   const found = await call('GET', `/api/networks/${lan.id}/discovered`);
   assert.deepEqual(found.map((d) => [d.ip, d.name, d.mac]), [['192.168.1.150', "Łukasz's iPhone", 'aa:bb:cc:00:00:20']]);
   const iot = await call('GET', `/api/networks/${site.networks.find((n) => n.vlan === 20).id}`);
-  assert.deepEqual([iot.entries[0].fqdn, iot.entries[0].description], ['', 'Kamera Garaż']);
+  assert.deepEqual([iot.entries[0].fqdn, iot.entries[0].alias, iot.entries[0].description], ['', 'Kamera Garaż', '']);
   assert.equal((await call('GET', `/api/entries/${lanFull.entries[0].id}/history`))[0].actor, 'unifi');
 
   const again = await call('POST', '/api/admin/unifi/sync');
@@ -123,7 +123,8 @@ test('sync keeps what the user already has: existing network is only filled in, 
   const [e] = n.entries;
   assert.deepEqual([e.fqdn, e.mac, e.type, e.mac_alert, e.seen_mac], ['serwer.lan', 'aa:bb:cc:00:00:01', 'server', true, 'aa:bb:cc:00:00:77']);   // MAC mismatch flagged, not overwritten
   const h = await call('GET', `/api/entries/${e.id}/history`);
-  assert.deepEqual([h[0].action, h[0].actor], ['mac_seen', 'unifi']);
+  assert.deepEqual(h.map((x) => [x.action, x.actor]).slice(0, 2), [['update', 'unifi'], ['mac_seen', 'unifi']]);   // alias adopted into the empty field + MAC mismatch trail
+  assert.equal(e.alias, 'nas');
 });
 
 test('sync requires tenant, consoles and admin; per-console errors do not abort the run', async () => {
@@ -140,4 +141,65 @@ test('sync requires tenant, consoles and admin; per-console errors do not abort 
   assert.match(r.results.find((x) => x.console === 'UDM7').errors[0], /404/);
   assert.equal(r.results.find((x) => x.console === 'Cloud Gateway Fiber').errors.length, 0);
   assert.equal((await call('GET', '/api/admin/unifi')).last.ok, false);
+});
+
+test('alias sync: UniFi rename flows into simpleIPAM; IPAM edits win conflicts and are never overwritten', async () => {
+  const ctx = await setup(); const { call, f } = ctx;
+  await connect(ctx);
+  f.clients = [{ id: 'c1', name: 'nas', type: 'WIRED', ipAddress: '192.168.1.10', macAddress: 'aa:bb:cc:00:00:10' }];
+  const first = await call('POST', '/api/admin/unifi/sync');
+  assert.equal(first.results[0].aliases.updated, 0);                               // created with the alias, nothing to merge yet
+  const site = (await call('GET', '/api/overview'))[0].sites[0];
+  const netId = site.networks.find((n) => n.cidr === '192.168.1.0/24').id;
+  const get = async () => (await call('GET', `/api/networks/${netId}`)).entries[0];
+  assert.deepEqual([(await get()).alias, (await get()).unifi_name], ['nas', 'nas']);
+
+  f.clients[0].name = 'NAS Salon';                                                  // renamed in UniFi
+  const dry = await call('POST', '/api/admin/unifi/sync', { dry_run: true });
+  assert.equal(dry.results[0].aliases.updated, 1);
+  assert.equal((await get()).alias, 'nas');                                         // preview wrote nothing
+  await call('POST', '/api/admin/unifi/sync');
+  let e = await get();
+  assert.deepEqual([e.alias, e.unifi_name], ['NAS Salon', 'NAS Salon']);
+  const h = await call('GET', `/api/entries/${e.id}/history`);
+  assert.deepEqual([h[0].actor, h[0].changes.alias], ['unifi', ['nas', 'NAS Salon']]);
+
+  await call('PUT', `/api/entries/${e.id}`, { ip: e.ip, alias: 'Serwer plików' });  // edited in simpleIPAM
+  await call('POST', '/api/admin/unifi/sync');                                      // UniFi unchanged: IPAM edit stays
+  assert.equal((await get()).alias, 'Serwer plików');
+
+  f.clients[0].name = 'NAS Garaż';                                                  // now both sides differ -> IPAM wins
+  const r = await call('POST', '/api/admin/unifi/sync');
+  assert.deepEqual([r.results[0].aliases.updated, r.results[0].aliases.conflicts], [0, 1]);
+  e = await get();
+  assert.deepEqual([e.alias, e.unifi_name], ['Serwer plików', 'NAS Garaż']);
+
+  // API clients that omit alias on PUT keep it; CSV imports without an alias column keep it too
+  await call('PUT', `/api/entries/${e.id}`, { ip: e.ip, fqdn: 'nas.lan' });
+  assert.equal((await get()).alias, 'Serwer plików');
+  await call('POST', `/api/networks/${netId}/import`, { csv: 'ip,fqdn\n192.168.1.10,nas2.lan\n' });
+  assert.equal((await get()).alias, 'Serwer plików');
+  assert.ok((await call('GET', '/api/search', {}, { q: 'serwer plik' })).length === 1);       // searchable
+});
+
+test('diagnose probes the integration and classic APIs with GET only and reports statuses', async () => {
+  const ctx = await setup(); const { call, f } = ctx;
+  await connect(ctx);
+  const methods = [];
+  const base = f.fetch;
+  f.fetch = async (url, init) => {
+    methods.push(init.method ?? 'GET');
+    if (new URL(url).pathname.endsWith('/proxy/network/api/self/sites')) return { ok: false, status: 401, json: async () => ({}) };
+    return base(url, init);
+  };
+  // the api instance captured f.fetch at creation: rebuild one sharing the same db is overkill, so exercise probe() directly
+  const { probe } = await import('../src/unifi.js');
+  const cfg = { api_key: 'KEY' };
+  const a = await probe(cfg, 'host1', '/integration/v1/sites', { fetch: f.fetch });
+  const b = await probe(cfg, 'host1', '/api/self/sites', { fetch: f.fetch });
+  assert.deepEqual([a.ok, a.status, a.count], [true, 200, 1]);
+  assert.deepEqual([b.ok, b.status], [false, 401]);
+  assert.deepEqual([...new Set(methods)], ['GET']);
+  const r = await call('POST', '/api/admin/unifi/diagnose');          // route wiring (fake answers 404 for the classic path)
+  assert.deepEqual([r.results[0].console, r.results[0].integration.ok, r.results[0].legacy.status], ['Cloud Gateway Fiber', true, 404]);
 });

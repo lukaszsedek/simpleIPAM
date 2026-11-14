@@ -41,6 +41,7 @@ function EntryForm({ net, entry, onClose, onSaved, notify }) {
           </div>
         </Field>
         <Field label="FQDN"><input value={f.fqdn ?? ''} onInput={set('fqdn')} placeholder="nas.home.lan" /></Field>
+        <Field label="Alias" hint="przyjazna nazwa; zgodna z aliasem w UniFi"><input value={f.alias ?? ''} onInput={set('alias')} placeholder="NAS w salonie" /></Field>
         <Field label="MAC"><input class="mono" value={f.mac ?? ''} onInput={set('mac')} placeholder="aa:bb:cc:dd:ee:ff" /></Field>
         <Field label="Typ">
           <select value={f.type} onChange={set('type')}>
@@ -89,7 +90,7 @@ function ScanModal({ net, onClose, onAdd }) {
   );
 }
 
-const FIELD_LABELS = { ip: 'IP', fqdn: 'FQDN', mac: 'MAC', type: 'Typ', status: 'Status', tags: 'Tagi', description: 'Opis' };
+const FIELD_LABELS = { ip: 'IP', fqdn: 'FQDN', alias: 'Alias', mac: 'MAC', type: 'Typ', status: 'Status', tags: 'Tagi', description: 'Opis' };
 const show = (k, v) => (v === '' || v == null ? '∅' : k === 'type' ? TYPE_LABELS[v] ?? v : k === 'status' ? STATUS_LABELS[v] ?? v : v);
 const ACTIONS = { create: 'dodano', update: 'zmieniono', delete: 'usunięto', mac_seen: 'zauważył inny MAC', mac_ignored: 'zignorowano MAC' };
 
@@ -212,7 +213,7 @@ export function Network({ id, notify, reload, onEditNet, onDeleteNet }) {
     const s = q.toLowerCase();
     const list = (net?.entries ?? []).filter((e) =>
       (status === 'all' || e.status === status) &&
-      (!s || [e.ip, e.fqdn, e.mac, e.tags, e.description, TYPE_LABELS[e.type]].some((v) => v?.toLowerCase().includes(s))));
+      (!s || [e.ip, e.fqdn, e.alias, e.mac, e.tags, e.description, TYPE_LABELS[e.type]].some((v) => v?.toLowerCase().includes(s))));
     const val = (e) => (sort.key === 'ip' ? ipNum(e.ip) : (e[sort.key] ?? '').toString().toLowerCase());
     return list.sort((a, b) => (val(a) < val(b) ? -1 : val(a) > val(b) ? 1 : 0) * sort.dir);
   }, [net, q, status, sort]);
@@ -304,7 +305,7 @@ export function Network({ id, notify, reload, onEditNet, onDeleteNet }) {
             {found.map((d) => (
               <li><span class="mono">{d.ip}</span>{d.name && <b>{d.name}</b>}{d.mac && <span class="mono muted small-text">{d.mac}</span>}<span class="muted small-text">wykryto {ago(d.first_seen)}</span>
                 {canEdit && <span class="row-btns">
-                  <button class="btn small" onClick={() => setForm({ ip: d.ip, mac: d.mac, description: d.name })}>Dodaj</button>
+                  <button class="btn small" onClick={() => setForm({ ip: d.ip, mac: d.mac, alias: d.name })}>Dodaj</button>
                   <button class="btn small ghost" onClick={async () => { await api.dismiss(d.id); load(); reload(); }}>Ignoruj</button>
                 </span>}</li>
             ))}
@@ -351,7 +352,7 @@ export function Network({ id, notify, reload, onEditNet, onDeleteNet }) {
             <thead><tr>
               {canEdit && <th class="check"><input type="checkbox" checked={allOn} aria-label="Zaznacz wszystkie"
                 onChange={() => setSel(allOn ? new Set() : new Set(rows.map((e) => e.id)))} /></th>}
-              {th('ip', 'IP')}{th('fqdn', 'FQDN')}{th('mac', 'MAC')}{th('type', 'Typ')}{th('status', 'Status')}{th('description', 'Opis')}{th('last_seen', 'Widziany')}<th />
+              {th('ip', 'IP')}{th('fqdn', 'FQDN')}{th('alias', 'Alias')}{th('mac', 'MAC')}{th('type', 'Typ')}{th('status', 'Status')}{th('description', 'Opis')}{th('last_seen', 'Widziany')}<th />
             </tr></thead>
             <tbody>
               {rows.map((e) => (
@@ -359,6 +360,7 @@ export function Network({ id, notify, reload, onEditNet, onDeleteNet }) {
                   {canEdit && <td class="check"><input type="checkbox" checked={sel.has(e.id)} onChange={() => toggle(e.id)} aria-label={`Zaznacz ${e.ip}`} /></td>}
                   <td class="mono ip">{e.ip}</td>
                   <td><EditableCell readOnly={!canEdit} value={e.fqdn} placeholder="—" onSave={(v) => patch(e, { fqdn: v })} /></td>
+                  <td><EditableCell readOnly={!canEdit} value={e.alias} placeholder="—" onSave={(v) => patch(e, { alias: v })} /></td>
                   <td class="mono muted">{e.mac || '—'}
                     {e.mac_alert && (
                       <div class="mac-alert" role="alert">
