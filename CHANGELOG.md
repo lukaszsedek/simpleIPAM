@@ -5,6 +5,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+## [0.10.2] - 2026-11-14
+
 ### Changed
 - Administration: Google sign-in and UniFi moved from Settings to a new "Integrations" tab; Settings keeps access and system info.
 
