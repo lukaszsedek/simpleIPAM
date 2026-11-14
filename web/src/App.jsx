@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { api } from './api.js';
-import { Icon, Modal, Field, Logo, Toasts, ConfirmHost, ask, SITE_ICONS, ROLE_LABELS } from './ui.jsx';
+import { Icon, Modal, Field, Logo, Toasts, ConfirmHost, ask, SITE_ICONS, ROLE_LABELS, RANK } from './ui.jsx';
 import { Network } from './Network.jsx';
 import { Admin } from './Admin.jsx';
 import { Issues } from './Issues.jsx';
+import { Planner } from './Planner.jsx';
 import { AuthScreen } from './Auth.jsx';
 // `tx`, not `t`: tenants are called `t` all over this file.
 import { t as tx, useLang, setLang, getLang, LANGS } from './i18n.js';
@@ -65,6 +66,16 @@ function TenantForm({ tenant, onClose, onSaved, notify }) {
   );
 }
 
+// First / last usable address of a CIDR, offered as the gateway.
+const gwOf = (cidr, last) => {
+  const m = /^\s*(\d+)\.(\d+)\.(\d+)\.(\d+)\/(\d+)\s*$/.exec(cidr ?? '');
+  if (!m || +m[5] < 8 || +m[5] > 30 || m.slice(1, 5).some((o) => +o > 255)) return '';
+  const size = 2 ** (32 - +m[5]);
+  const base = Math.floor(((+m[1] * 256 + +m[2]) * 256 * 256 + +m[3] * 256 + +m[4]) / size) * size;
+  const n = last ? base + size - 2 : base + 1;
+  return [n >>> 24, (n >>> 16) & 255, (n >>> 8) & 255, n & 255].join('.');
+};
+
 function NetworkForm({ net, siteId, onClose, onSaved, notify }) {
   const [f, setF] = useState(net ?? { site_id: siteId, name: '', cidr: '', vlan: '', gateway: '', dhcp_start: '', dhcp_end: '', dns: '', description: '' });
   const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
@@ -78,7 +89,13 @@ function NetworkForm({ net, siteId, onClose, onSaved, notify }) {
         <Field label="Nazwa"><input value={f.name} onInput={set('name')} placeholder={tx('LAN, IoT, Goście…')} required /></Field>
         <Field label="CIDR"><input class="mono" value={f.cidr} onInput={set('cidr')} placeholder="192.168.10.0/24" required /></Field>
         <Field label="VLAN"><input type="number" min="1" max="4094" value={f.vlan ?? ''} onInput={set('vlan')} /></Field>
-        <Field label="Brama"><input class="mono" value={f.gateway} onInput={set('gateway')} placeholder="192.168.10.1" /></Field>
+        <Field label="Brama">
+          <input class="mono" value={f.gateway} onInput={set('gateway')} placeholder={gwOf(f.cidr, false) || '192.168.10.1'} />
+          {gwOf(f.cidr, false) && <span class="gw-pick">
+            <button type="button" class="link-btn" onClick={() => setF({ ...f, gateway: gwOf(f.cidr, false) })}>{tx('pierwszy adres')} ({gwOf(f.cidr, false)})</button>
+            <button type="button" class="link-btn" onClick={() => setF({ ...f, gateway: gwOf(f.cidr, true) })}>{tx('ostatni adres')} ({gwOf(f.cidr, true)})</button>
+          </span>}
+        </Field>
         <Field label="DHCP od"><input class="mono" value={f.dhcp_start} onInput={set('dhcp_start')} /></Field>
         <Field label="DHCP do"><input class="mono" value={f.dhcp_end} onInput={set('dhcp_end')} /></Field>
         <Field label="DNS" span><input class="mono" value={f.dns} onInput={set('dns')} placeholder="1.1.1.1, 192.168.10.2" /></Field>
@@ -307,6 +324,7 @@ export function App() {
   };
 
   const netId = (/^#\/n\/(\d+)/.exec(hash) ?? [])[1];
+  const plan = /^#\/plan\/(\d+)(?:\/(\w+))?/.exec(hash);
   const issueTotal = sites.reduce((n, s) => n + s.networks.reduce((m, x) => m + (x.stats.issues ?? 0), 0), 0);
   // Locations start collapsed (just the list); the one holding the open network is shown expanded so you can see where you are.
   const siteOpen = (s) => open[s.id] ?? s.networks.some((n) => String(n.id) === netId);
@@ -353,6 +371,9 @@ export function App() {
                   <button class="icon-btn" aria-label={tx('Edytuj tenanta')} onClick={() => setModal({ kind: 'tenant', tenant: t })}><Icon name="edit" size={14} /></button>
                 </>}
               </div>
+              {open[`t${t.id}`] !== false && RANK[t.role] >= RANK.reader && (
+                <a class={`side-link plan-link ${plan?.[1] === String(t.id) ? 'on' : ''}`} href={`#/plan/${t.id}`}><Icon name="map" size={15} /><span>{tx('Planowanie adresów')}</span></a>
+              )}
               {open[`t${t.id}`] !== false && t.sites.map((s) => (
                 <div class="site">
                   <div class="site-head">
@@ -438,6 +459,7 @@ export function App() {
         </header>
         <button class="menu-btn icon-btn" onClick={() => setNav(!nav)} aria-label="Menu"><Icon name="menu" /></button>
         {hash === '#/issues' ? <Issues notify={notify} />
+          : plan ? <Planner key={plan[1]} tenantId={plan[1]} tab={plan[2]} notify={notify} onChanged={() => { setRev(rev + 1); reload(); }} />
           : adminTab ? <Admin tab={adminTab} tenants={tenants} me={me} notify={notify} onUsersChanged={refreshMe} />
           : netId ? <Network key={`${netId}-${rev}`} id={netId} notify={notify} reload={reload}
               onEditNet={(n) => setModal({ kind: 'net', net: n })} onDeleteNet={delNet} />
@@ -458,6 +480,7 @@ export function App() {
                     <h2><Icon name="tenant" /> {t.name}</h2>
                     {t.description && <span class="muted">{t.description}</span>}
                     <span class="spacer" />
+                    {RANK[t.role] >= RANK.reader && <a class="btn small ghost" href={`#/plan/${t.id}`}><Icon name="map" size={14} />{tx('Planowanie')}</a>}
                     {t.role === 'admin' && <button class="btn small ghost" onClick={() => setModal({ kind: 'site', tenantId: t.id })}><Icon name="plus" size={14} />{tx('Lokalizacja')}</button>}
                     {isAdmin && <button class="btn small ghost danger" onClick={() => delTenant(t)} aria-label={tx('Usuń tenanta')}><Icon name="trash" size={14} /></button>}
                   </div>

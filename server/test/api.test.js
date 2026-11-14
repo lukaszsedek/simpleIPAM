@@ -397,3 +397,79 @@ test('xlsx export is a valid zip workbook; aggregated issues list spans networks
   const stats = (await admin('GET', `/api/networks/${net.id}`)).stats;
   assert.deepEqual([stats.static, stats.dhcp_reserved, stats.dynamic], [2, 1, 0]);
 });
+
+test('gateway is not a new host; network and broadcast addresses cannot be entries', async () => {
+  const alive = new Set(['10.5.0.1', '10.5.0.9']);
+  const api = createApi(openDb(':memory:'), { ping: async (ip) => alive.has(ip), neighbors: async () => new Map([['10.5.0.1', 'aa:bb:cc:00:00:01']]) });
+  const admin = client(api);
+  await admin.register('admin');
+  const site = await mkSite(admin, 'dom1');
+  const net = await admin('POST', `/api/sites/${site.id}/networks`, { name: 'lan', cidr: '10.5.0.0/24', gateway: 'first' });
+  assert.equal(net.gateway, '10.5.0.1');
+  const res = await admin('POST', `/api/networks/${net.id}/scan`);
+  assert.deepEqual(res.alive.map((h) => [h.ip, h.known]), [['10.5.0.1', true], ['10.5.0.9', false]]);
+  assert.equal(res.alive[0].gateway, true);
+  assert.deepEqual((await admin('GET', `/api/networks/${net.id}/discovered`)).map((d) => d.ip), ['10.5.0.9']);
+  const full = await admin('GET', `/api/networks/${net.id}`);
+  assert.equal(full.gateway_mac, 'aa:bb:cc:00:00:01');
+  assert.ok(full.gateway_seen);
+  assert.equal(full.network_addr, '10.5.0.0');
+  assert.equal(full.broadcast_addr, '10.5.0.255');
+  assert.equal(full.stats.new_hosts, 1);
+  assert.equal(full.stats.infra, 1);
+  await assert.rejects(admin('POST', `/api/networks/${net.id}/entries`, { ip: '10.5.0.0' }), /adres sieci/);
+  await assert.rejects(admin('POST', `/api/networks/${net.id}/entries`, { ip: '10.5.0.255' }), /rozgłoszeniowy/);
+  await assert.rejects(admin('PUT', `/api/networks/${net.id}`, { name: 'lan', cidr: '10.5.0.0/24', gateway: '10.5.0.255' }), /Brama nie może/);
+  const last = await admin('PUT', `/api/networks/${net.id}`, { name: 'lan', cidr: '10.5.0.0/24', gateway: 'last' });
+  assert.equal(last.gateway, '10.5.0.254');
+  await admin('PUT', `/api/networks/${net.id}`, { name: 'lan', cidr: '10.5.0.0/24', gateway: '10.5.0.1', dhcp_start: '10.5.0.1', dhcp_end: '10.5.0.50' });
+  assert.ok((await admin('GET', `/api/networks/${net.id}/issues`)).some((i) => /Brama 10\.5\.0\.1 leży w puli DHCP/.test(i.text)));
+});
+
+test('planning: pools, allocation to locations, conflicts, VLAN registry and permissions', async () => {
+  const api = createApi(openDb(':memory:'));
+  const admin = client(api);
+  await admin.register('admin');
+  const a = await mkSite(admin, 'dom1');
+  const b = await mkSite(admin, 'dom2');
+  const tenantId = a.tenant_id;
+  const pool = await admin('POST', `/api/tenants/${tenantId}/pools`, { cidr: '10.0.0.0/8', name: 'Korpo' });
+  await assert.rejects(admin('POST', `/api/tenants/${tenantId}/pools`, { cidr: '10.1.0.0/16' }), /nakłada się z pulą/);
+  assert.equal((await admin('GET', `/api/pools/${pool.id}/suggest`, {}, { prefix: 24 })).cidr, '10.0.0.0/24');
+
+  const n1 = await admin('POST', `/api/pools/${pool.id}/allocate`, { site_id: a.id, name: 'LAN', prefix: 24, vlan: 10 });
+  assert.equal(n1.cidr, '10.0.0.0/24');
+  assert.equal(n1.gateway, '10.0.0.1');
+  const n2 = await admin('POST', `/api/pools/${pool.id}/allocate`, { site_id: b.id, name: 'IoT', prefix: 23, vlan: 20 });
+  assert.equal(n2.cidr, '10.0.2.0/23');          // /23 must be aligned, so it skips .1.0
+  await assert.rejects(admin('POST', `/api/pools/${pool.id}/allocate`, { site_id: b.id, name: 'x', cidr: '10.0.0.128/25' }), /nakłada się/);
+  await assert.rejects(admin('POST', `/api/pools/${pool.id}/allocate`, { site_id: b.id, name: 'x', cidr: '192.168.0.0/24' }), /poza pulą/);
+
+  await admin('POST', `/api/tenants/${tenantId}/vlans`, { vid: 10, name: 'LAN' });
+  await assert.rejects(admin('POST', `/api/tenants/${tenantId}/vlans`, { vid: 10, name: 'dup', site_id: a.id }), /już zdefiniowany/);
+  await assert.rejects(admin('POST', `/api/tenants/${tenantId}/vlans`, { vid: 5000, name: 'bad' }), /1–4094/);
+
+  const plan = await admin('GET', `/api/tenants/${tenantId}/plan`);
+  const p = plan.pools[0];
+  assert.equal(p.allocated, 256 + 512);
+  assert.equal(p.free, 2 ** 24 - 768);
+  assert.deepEqual(p.allocations.map((x) => x.cidr), ['10.0.0.0/24', '10.0.2.0/23']);
+  assert.equal(p.free_blocks[0].cidr, '10.0.1.0/24');
+  assert.deepEqual(plan.unregistered.map((u) => u.vid), [20]);
+  assert.equal(plan.vlans[0].networks.length, 1);
+  assert.equal(plan.unpooled.length, 0);
+  assert.ok((await admin('GET', `/api/networks/${n2.id}/issues`)).some((i) => /VLAN 20 nie jest zdefiniowany/.test(i.text)));
+
+  // an overlapping network created by hand in another location shows up as a conflict
+  await admin('POST', `/api/sites/${b.id}/networks`, { name: 'dup', cidr: '10.0.0.0/25' });
+  assert.ok((await admin('GET', `/api/tenants/${tenantId}/plan`)).conflicts.some((c) => c.kind === 'overlap'));
+
+  const reader = client(api);
+  await reader.register('reader');
+  await assert.rejects(reader('GET', `/api/tenants/${tenantId}/plan`), /uprawnień/);
+  await admin('PUT', `/api/users/${(await admin('GET', '/api/users')).find((u) => u.username === 'reader').id}/roles`, { tenant_id: tenantId, role: 'reader' });
+  assert.equal((await reader('GET', `/api/tenants/${tenantId}/plan`)).role, 'reader');
+  await assert.rejects(reader('POST', `/api/tenants/${tenantId}/pools`, { cidr: '172.16.0.0/12' }), /uprawnień/);
+  await admin('DELETE', `/api/pools/${pool.id}`);
+  assert.equal((await admin('GET', `/api/tenants/${tenantId}/plan`)).unpooled.length, 3);   // networks survive their pool
+});

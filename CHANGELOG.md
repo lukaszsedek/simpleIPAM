@@ -5,6 +5,16 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+### Added
+- **Address planning** per tenant (sidebar "Address planning" / `#/plan/<tenant>`): define address pools (e.g. `10.0.0.0/8`), see how much is allocated and which aligned blocks are still free, and allocate the next free subnet to a location in one step (creates the network with the first usable address as gateway). Conflicts (networks overlapping across locations, networks straddling a pool border) are listed.
+- **VLAN registry** per tenant (whole tenant or one location) with the networks using each VLAN, a list of VLAN numbers used but not defined, and a hint in "To review" when a network uses an undefined VLAN or two networks of a location share a VLAN.
+- Network address, default gateway and broadcast address are shown as pinned system rows and on the address map. The gateway shows its MAC and when it was last seen; "Save as entry" turns it into a normal entry. The network form can fill the gateway with the first or last address.
+- API: `GET /api/tenants/:id/plan`, pools (`/api/tenants/:id/pools`, `/api/pools/:id`, `/suggest`, `/allocate`) and VLANs (`/api/tenants/:id/vlans`, `/api/vlans/:id`).
+
+### Fixed
+- A scan no longer reports the gateway (usually `.1`) as a new, unassigned host.
+- Entries can no longer be created on the network or broadcast address, and the gateway cannot be set to either.
+
 ## [0.10.2] - 2026-11-14
 
 ### Changed

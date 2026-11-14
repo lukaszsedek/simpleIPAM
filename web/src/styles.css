@@ -454,3 +454,26 @@ button.tag { border: 0; background: var(--surface-2); font-family: inherit; padd
 button.tag:hover { color: var(--accent); }
 
 .badge.warn { display: inline-block; height: auto; width: auto; min-width: 0; padding: 1px 7px; line-height: 1.5; font-size: 11px; border-radius: 999px; }
+
+/* network address / gateway / broadcast */
+.ipcell.sys { background: transparent; border: 1px dashed var(--border); box-sizing: border-box; display: block; }
+.sys-row td { background: var(--surface-2); color: var(--muted); }
+.sys-row td b { color: var(--text); font-weight: 600; }
+.chip.muted-chip { opacity: .75; }
+.gw-pick { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 4px; font-size: 12px; }
+
+/* planning */
+.pool { display: flex; flex-direction: column; gap: 10px; }
+.pool-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.pool-head h3 { margin: 0; }
+.pool-bar { position: relative; height: 28px; border-radius: 8px; background: var(--c-free); overflow: hidden; border: 1px solid var(--border); }
+.pool-seg { position: absolute; top: 0; bottom: 0; min-width: 3px; border-left: 1px solid var(--surface); }
+.pool-seg:hover { filter: brightness(1.15); }
+.site-dot { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 6px; vertical-align: baseline; }
+.free-blocks { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.chip.block { cursor: pointer; font-family: ui-monospace, monospace; border: 1px dashed var(--border); background: transparent; }
+.chip.block:hover { border-color: var(--accent); color: var(--accent); }
+.plan-link { margin: 2px 0 4px 8px; font-size: 13px; }
+.sys-row td.row-actions { background: var(--surface-2); }
+td .chip + .chip { margin-left: 4px; }
+.scan-list li > .muted { flex: 1; text-align: left; }

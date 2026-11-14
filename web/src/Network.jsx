@@ -211,6 +211,8 @@ function IpMap({ net, byNum, onPick }) {
   const ds = net.dhcp_start ? ipNum(net.dhcp_start) : -1;
   const de = net.dhcp_end ? ipNum(net.dhcp_end) : -2;
   const cells = [];
+  const sys = (n, label) => <span key={`s${n}`} class="ipcell sys" title={`${ipOf(n)} · ${label}`} aria-label={`${ipOf(n)} · ${label}`} />;
+  if (net.network_addr) cells.push(sys(lo - 1, t('adres sieci')));
   for (let n = lo; n <= hi; n++) {
     const e = byNum.get(n);
     const pool = n >= ds && n <= de;
@@ -221,11 +223,12 @@ function IpMap({ net, byNum, onPick }) {
     const title = `${ipOf(n)}${e?.fqdn ? ` · ${e.fqdn}` : ''}${n === gw ? ` · ${t('brama')}` : ''}${!e && n >= ds && n <= de ? ' · DHCP' : ''}`;
     cells.push(<button key={n} class={`ipcell ${cls}`} title={title} aria-label={title} onClick={() => onPick(n, e)} />);
   }
+  if (net.broadcast_addr) cells.push(sys(hi + 1, t('adres rozgłoszeniowy (broadcast)')));
   return (
     <>
       <div class="ipmap">{cells}</div>
       <div class="legend">
-        {[['used', 'Statyczny'], ['reserved', 'Rezerwacja DHCP'], ['dynamic', 'Dynamiczny'], ['dhcp', 'Pula DHCP'], ['gw', 'Brama'], ['free', 'Wolny']].map(([c, l]) => (
+        {[['used', 'Statyczny'], ['reserved', 'Rezerwacja DHCP'], ['dynamic', 'Dynamiczny'], ['dhcp', 'Pula DHCP'], ['gw', 'Brama'], ['sys', 'Sieć / broadcast'], ['free', 'Wolny']].map(([c, l]) => (
           <span><i class={`ipcell ${c}`} />{t(l)}</span>
         ))}
       </div>
@@ -271,7 +274,7 @@ export function Network({ id, notify, reload, onEditNet, onDeleteNet }) {
   const canEdit = RANK[net.role] >= RANK.contributor;
   const isAdmin = net.role === 'admin';
   const st = net.stats;
-  const pct = Math.round((st.used / Math.max(1, st.total)) * 100);
+  const pct = Math.round(((st.used + (st.infra ?? 0)) / Math.max(1, st.total)) * 100);
 
   // Stores a change and offers to undo it (the old values of just the touched fields are put back on top of the current entry).
   const patch = async (e, changes) => {
@@ -325,6 +328,26 @@ export function Network({ id, notify, reload, onEditNet, onDeleteNet }) {
   );
   const pick = (n, e) => canEdit && (e ? setForm(e) : setForm({ ip: ipOf(n) }));
 
+  // Network address, gateway and broadcast are part of every subnet but are not entries; they get pinned, read-only rows.
+  const showSys = !q && status === 'all';
+  const sysRow = (kind, ip, label, hint, extra = {}) => (
+    <tr key={kind} class="sys-row">
+      {canEdit && <td class="check" />}
+      <td class="mono ip">{ip}<div class="muted small-text nowrap">{extra.seen ?? ''}</div></td>
+      <td class="name-cell" title={extra.title ?? ''}><b>{label}</b><div class="muted small-text">{hint}</div></td>
+      {cols.mac && <td class="mono muted">{extra.mac || '—'}</td>}
+      {cols.type && <td>{extra.type && <span class="chip">{extra.type}</span>}</td>}
+      <td><span class="chip">{t('Systemowy')}</span></td>
+      {cols.desc && <td />}
+      <td class="row-actions">{extra.actions}</td>
+    </tr>
+  );
+  const gwHasEntry = !!net.gateway && net.entries.some((e) => e.ip === net.gateway);
+  const gwRow = net.gateway && !gwHasEntry && sysRow('gw', net.gateway, t('Brama domyślna'), t('router sieci'), {
+    title: t('nie jest nowym urządzeniem — wpisz ją, żeby dodać nazwę i MAC'), mac: net.gateway_mac, type: TYPE_LABELS.router, seen: net.gateway_seen ? ago(net.gateway_seen) : '',
+    actions: canEdit && <button class="btn small ghost" onClick={() => setForm({ ip: net.gateway, type: 'router', mac: net.gateway_mac, alias: t('Brama') })}>{t('Zapisz jako wpis')}</button>,
+  });
+
   return (
     <div class="page">
       <header class="page-head">
@@ -333,7 +356,9 @@ export function Network({ id, notify, reload, onEditNet, onDeleteNet }) {
           <h1>{net.name} <span class="mono cidr">{net.cidr}</span></h1>
           <div class="chips">
             {net.vlan && <span class="chip accent">VLAN {net.vlan}</span>}
-            {net.gateway && <span class="chip">{t('Brama')} <b class="mono">{net.gateway}</b></span>}
+            {net.gateway && <span class="chip" title={net.gateway_seen ? `${t('widziana')} ${ago(net.gateway_seen)}${net.gateway_mac ? ` · ${net.gateway_mac}` : ''}` : ''}>{t('Brama')} <b class="mono">{net.gateway}</b></span>}
+            {net.network_addr && <span class="chip muted-chip">{t('Adres sieci')} <b class="mono">{net.network_addr}</b></span>}
+            {net.broadcast_addr && <span class="chip muted-chip">Broadcast <b class="mono">{net.broadcast_addr}</b></span>}
             {net.dhcp_start && <span class="chip">DHCP <b class="mono">{net.dhcp_start} – {net.dhcp_end}</b></span>}
             {net.dns && <span class="chip">DNS <b class="mono">{net.dns}</b></span>}
           </div>
@@ -438,6 +463,8 @@ export function Network({ id, notify, reload, onEditNet, onDeleteNet }) {
               {th('ip', 'IP')}{th('fqdn', 'Nazwa / alias')}{cols.mac && th('mac', 'MAC')}{cols.type && th('type', 'Typ')}{th('status', 'Status')}{cols.desc && th('description', 'Opis')}<th />
             </tr></thead>
             <tbody>
+              {showSys && net.network_addr && sysRow('net', net.network_addr, t('Adres sieci'), t('zarezerwowany'))}
+              {showSys && gwRow}
               {rows.map((e) => (
                 <tr key={e.id} class={sel.has(e.id) ? 'selected' : ''}>
                   {canEdit && <td class="check"><input type="checkbox" checked={sel.has(e.id)} onChange={() => toggle(e.id)} aria-label={t('Zaznacz {ip}', { ip: e.ip })} /></td>}
@@ -472,6 +499,7 @@ export function Network({ id, notify, reload, onEditNet, onDeleteNet }) {
                   </td>
                 </tr>
               ))}
+              {showSys && net.broadcast_addr && sysRow('bc', net.broadcast_addr, t('Adres rozgłoszeniowy (broadcast)'), t('zarezerwowany'))}
             </tbody>
           </table>
           {!rows.length && <div class="empty">{t(net.entries.length ? 'Brak wyników.' : canEdit ? 'Ta sieć jest jeszcze pusta — dodaj pierwszy wpis lub zaimportuj CSV.' : 'Ta sieć jest jeszcze pusta.')}</div>}

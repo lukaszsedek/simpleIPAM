@@ -1,4 +1,4 @@
-import { ipToInt, intToIp, parseCidr, normalizeCidr, inCidr, usableRange, normalizeMac } from './ip.js';
+import { ipToInt, intToIp, parseCidr, normalizeCidr, inCidr, usableRange, normalizeMac, networkAddr, broadcastAddr, mergeRanges, freeBlocks, findFree } from './ip.js';
 import { execFile } from 'node:child_process';
 
 import { HttpError } from './errors.js';
@@ -79,7 +79,10 @@ export function createApi(db, opts = {}) {
       if (v && !inCidr(v, cidr)) throw bad(`${label} musi należeć do sieci ${cidr}`);
       return v;
     };
-    const gateway = ipField('gateway', 'Brama');
+    const gwIn = str(b.gateway, 15);
+    const [glo, ghi] = usableRange(cidr);
+    const gateway = gwIn === 'first' ? intToIp(glo) : gwIn === 'last' ? intToIp(ghi) : ipField('gateway', 'Brama');
+    if (gateway && (gateway === networkAddr(cidr) || gateway === broadcastAddr(cidr))) throw bad('Brama nie może być adresem sieci ani adresem rozgłoszeniowym');
     const dhcp_start = ipField('dhcp_start', 'Początek DHCP');
     const dhcp_end = ipField('dhcp_end', 'Koniec DHCP');
     if (!!dhcp_start !== !!dhcp_end) throw bad('Podaj oba końce zakresu DHCP');
@@ -136,6 +139,19 @@ export function createApi(db, opts = {}) {
         if (days <= 180) issues.push({ level: 'info', text: `Przy obecnym tempie (${added} nowych wpisów w 60 dni) wolne adresy skończą się za ok. ${days} dni` });
       }
     }
+    if (net.gateway && net.dhcp_start && ipToInt(net.gateway) >= ipToInt(net.dhcp_start) && ipToInt(net.gateway) <= ipToInt(net.dhcp_end)) {
+      issues.push({ level: 'warn', text: `Brama ${net.gateway} leży w puli DHCP — serwer DHCP może oddać ją innemu urządzeniu` });
+    }
+    if (net.vlan) {
+      const tenantId = tenantIdOf(net.site_id);
+      const registry = all('SELECT * FROM vlans WHERE tenant_id=?', tenantId);
+      if (registry.length && !registry.some((v) => v.vid === net.vlan && (v.site_id == null || v.site_id === net.site_id))) {
+        issues.push({ level: 'info', text: `VLAN ${net.vlan} nie jest zdefiniowany w rejestrze VLAN-ów tenanta` });
+      }
+      for (const o of all('SELECT name, cidr FROM networks WHERE site_id=? AND id!=? AND vlan=?', net.site_id, net.id, net.vlan)) {
+        issues.push({ level: 'warn', text: `VLAN ${net.vlan} jest przypisany także do sieci „${o.name}” (${o.cidr}) w tej samej lokalizacji` });
+      }
+    }
     const me = parseCidr(net.cidr);
     for (const o of all('SELECT * FROM networks WHERE site_id=? AND id!=?', net.site_id, net.id)) {
       const c = parseCidr(o.cidr);
@@ -156,9 +172,11 @@ export function createApi(db, opts = {}) {
     const split = one(`SELECT SUM(ip_num NOT BETWEEN ? AND ?) AS static_n, SUM(ip_num BETWEEN ? AND ? AND status='reserved') AS dhcp_reserved,
         SUM(ip_num BETWEEN ? AND ? AND status='used') AS dynamic_n FROM entries WHERE network_id=? AND status!='free'`, ps, pe, ps, pe, ps, pe, n.id);
     const issues = issuesOf(n).filter((i) => i.level !== 'info').length;
-    const fresh = one('SELECT COUNT(*) AS n FROM discovered WHERE network_id=? AND dismissed=0', n.id).n;
+    const fresh = one("SELECT COUNT(*) AS n FROM discovered WHERE network_id=? AND dismissed=0 AND ip!=?", n.id, n.gateway).n;
+    // the gateway occupies an address even without an entry
+    const infra = n.gateway && !one('SELECT 1 FROM entries WHERE network_id=? AND ip=?', n.id, n.gateway) ? 1 : 0;
     const alerts = all('SELECT mac, seen_mac, mac_ack FROM entries WHERE network_id=? AND seen_mac!=\'\'', n.id).filter(macAlert).length;
-    return { total, dhcp, used: row.used, reserved: row.reserved ?? 0, static: split.static_n ?? 0, dhcp_reserved: split.dhcp_reserved ?? 0, dynamic: split.dynamic_n ?? 0, issues, prefix: c.prefix, new_hosts: fresh, mac_alerts: alerts };
+    return { total, dhcp, used: row.used, reserved: row.reserved ?? 0, static: split.static_n ?? 0, dhcp_reserved: split.dhcp_reserved ?? 0, dynamic: split.dynamic_n ?? 0, issues, infra, prefix: c.prefix, new_hosts: fresh, mac_alerts: alerts };
   }
 
   // ---------- entries ----------
@@ -166,6 +184,8 @@ export function createApi(db, opts = {}) {
     const ip = str(b.ip, 15);
     const n = ipToInt(ip);
     if (n === null || !inCidr(ip, net.cidr)) throw bad(`Adres IP musi należeć do ${net.cidr}`);
+    if (ip === networkAddr(net.cidr)) throw bad('To adres sieci — nie można go przydzielić urządzeniu');
+    if (ip === broadcastAddr(net.cidr)) throw bad('To adres rozgłoszeniowy (broadcast) — nie można go przydzielić urządzeniu');
     const mac = normalizeMac(b.mac);
     if (mac === null) throw bad('Nieprawidłowy adres MAC');
     const fqdn = str(b.fqdn, 253).toLowerCase();
@@ -235,11 +255,16 @@ export function createApi(db, opts = {}) {
     const arp = await (opts.neighbors ?? readNeighbors)().catch(() => new Map());
     const entries = new Map(all('SELECT * FROM entries WHERE network_id=?', net.id).map((e) => [e.ip_num, e]));
     let macs = 0;
+    const gw = net.gateway ? ipToInt(net.gateway) : -1;
     for (const i of alive) {
       const ip = intToIp(i);
       const mac = arp.get(ip) ?? '';
       if (mac) macs++;
       const e = entries.get(i);
+      if (!e && i === gw) {      // the gateway is part of the network, not a new host
+        run("UPDATE networks SET gateway_seen=datetime('now'), gateway_mac=CASE WHEN ?!='' THEN ? ELSE gateway_mac END WHERE id=?", mac, mac, net.id);
+        continue;
+      }
       if (e) {
         run("UPDATE entries SET last_seen=datetime('now') WHERE id=?", e.id);
         observeMac(e, mac, 'skan');
@@ -248,7 +273,7 @@ export function createApi(db, opts = {}) {
           ON CONFLICT(network_id, ip) DO UPDATE SET last_seen=datetime('now'), mac=CASE WHEN excluded.mac!='' THEN excluded.mac ELSE mac END`, net.id, ip, mac);
       }
     }
-    return { hosts: alive.map((i) => ({ ip: intToIp(i), known: entries.has(i), mac: arp.get(intToIp(i)) ?? '' })), macs };
+    return { hosts: alive.map((i) => ({ ip: intToIp(i), known: entries.has(i) || i === gw, ...(i === gw && { gateway: true }), mac: arp.get(intToIp(i)) ?? '' })), macs };
   }
 
   // ---------- csv ----------
@@ -368,6 +393,10 @@ export function createApi(db, opts = {}) {
     }
     run(`UPDATE networks SET name=?, cidr=?, vlan=?, gateway=?, dhcp_start=?, dhcp_end=?, dns=?, description=?, auto_scan=? WHERE id=?`,
       n.name, n.cidr, n.vlan, n.gateway, n.dhcp_start, n.dhcp_end, n.dns, n.description, n.auto_scan, params.id);
+    if (n.gateway !== old.gateway) {
+      run("UPDATE networks SET gateway_mac='', gateway_seen=NULL WHERE id=?", old.id);
+      if (n.gateway) run('DELETE FROM discovered WHERE network_id=? AND ip=?', old.id, n.gateway);
+    }
     log('update', 'network', `${n.name} (${n.cidr})`);
     return { id: old.id, site_id: old.site_id, ...n };
   }));
@@ -383,7 +412,7 @@ export function createApi(db, opts = {}) {
     need(user, n.site_id, 'reader');
     const site = one('SELECT * FROM sites WHERE id=?', n.site_id);
     const tenant = one('SELECT * FROM tenants WHERE id=?', site.tenant_id);
-    return { ...n, site, tenant, role: roleAt(user, n.site_id), stats: netStats(n), entries: all('SELECT * FROM entries WHERE network_id=? ORDER BY ip_num', n.id).map(withFlags) };
+    return { ...n, network_addr: networkAddr(n.cidr), broadcast_addr: broadcastAddr(n.cidr), site, tenant, role: roleAt(user, n.site_id), stats: netStats(n), entries: all('SELECT * FROM entries WHERE network_id=? ORDER BY ip_num', n.id).map(withFlags) };
   });
   route('GET', '/api/networks/:id/next-free', ({ params, query, user }) => {
     const n = must(one('SELECT * FROM networks WHERE id=?', params.id), 'Sieć');
@@ -569,7 +598,7 @@ export function createApi(db, opts = {}) {
   route('GET', '/api/networks/:id/discovered', ({ params, user }) => {
     const net = must(one('SELECT * FROM networks WHERE id=?', params.id), 'Sieć');
     need(user, net.site_id, 'reader');
-    return all('SELECT * FROM discovered WHERE network_id=? AND dismissed=0 ORDER BY id', net.id)
+    return all('SELECT * FROM discovered WHERE network_id=? AND dismissed=0 AND ip!=? ORDER BY id', net.id, net.gateway)
       .sort((a, b) => ipToInt(a.ip) - ipToInt(b.ip));
   });
   route('POST', '/api/discovered/:id/dismiss', ({ params, user }) => {
@@ -626,6 +655,163 @@ export function createApi(db, opts = {}) {
       if (!used.some((u) => b <= u.last && u.first <= b + size - 1)) out.push(`${intToIp(b)}/${prefix}`);
     }
     return out;
+  });
+
+  // ---------- address planning: pools and VLANs per tenant ----------
+  function poolInput(b, tenantId, selfId = null) {
+    const cidr = normalizeCidr(b.cidr);
+    if (!cidr) throw bad('Nieprawidłowy CIDR puli (np. 10.0.0.0/8)');
+    const c = parseCidr(cidr);
+    for (const o of all('SELECT * FROM pools WHERE tenant_id=? AND id!=?', tenantId, selfId ?? 0)) {
+      const oc = parseCidr(o.cidr);
+      if (c.first <= oc.last && oc.first <= c.last) throw new HttpError(409, `Pula nakłada się z pulą ${o.cidr}${o.name ? ` („${o.name}”)` : ''}`);
+    }
+    return { cidr, name: str(b.name, 80), description: str(b.description) };
+  }
+  const tenantNets = (tenantId) => all(`SELECT n.*, s.name AS site_name FROM networks n JOIN sites s ON s.id=n.site_id WHERE s.tenant_id=? ORDER BY n.id`, tenantId)
+    .map((n) => ({ ...n, c: parseCidr(n.cidr) }));
+
+  route('GET', '/api/tenants/:id/plan', ({ params, user }) => {
+    const tenant = must(one('SELECT * FROM tenants WHERE id=?', params.id), 'Tenant');
+    needTenant(user, tenant.id, 'reader');
+    const nets = tenantNets(tenant.id).map((n) => {
+      const [lo, hi] = usableRange(n.cidr);
+      const used = one("SELECT COUNT(*) AS n FROM entries WHERE network_id=? AND status!='free'", n.id).n;
+      return { id: n.id, name: n.name, cidr: n.cidr, vlan: n.vlan, site_id: n.site_id, site: n.site_name, used, total: hi - lo + 1, c: n.c };
+    });
+    const pub = ({ c, ...n }) => n;
+    const pools = all('SELECT * FROM pools WHERE tenant_id=? ORDER BY id', tenant.id).map((p) => ({ ...p, c: parseCidr(p.cidr) }));
+    const inside = (n, p) => n.c.first >= p.c.first && n.c.last <= p.c.last;
+    const out = pools.map((p) => {
+      const mine = nets.filter((n) => n.c.first <= p.c.last && p.c.first <= n.c.last);
+      const taken = mergeRanges(mine.map((n) => ({ first: Math.max(n.c.first, p.c.first), last: Math.min(n.c.last, p.c.last) })));
+      const allocated = taken.reduce((s, r) => s + r.last - r.first + 1, 0);
+      const free = freeBlocks(p.c, mine.map((n) => n.c));
+      return {
+        id: p.id, name: p.name, cidr: p.cidr, description: p.description, size: p.c.size, allocated, free: p.c.size - allocated,
+        allocations: mine.filter((n) => inside(n, p)).sort((a, b) => a.c.first - b.c.first).map(pub),
+        free_blocks: free.slice(0, 64).map(({ cidr, size }) => ({ cidr, size })), free_block_count: free.length,
+        largest_free: free.length ? Math.max(...free.map((f) => f.size)) : 0,
+      };
+    });
+    const conflicts = [];
+    for (const p of pools) for (const n of nets) {
+      if (n.c.first <= p.c.last && p.c.first <= n.c.last && !inside(n, p)) conflicts.push({ kind: 'straddle', text: `Sieć ${n.cidr} („${n.name}”, ${n.site}) wystaje poza pulę ${p.cidr}` });
+    }
+    const inAnyPool = (n) => pools.some((p) => inside(n, p));
+    for (let i = 0; i < nets.length; i++) for (let j = i + 1; j < nets.length; j++) {
+      const [a, b] = [nets[i], nets[j]];
+      if (a.site_id !== b.site_id && a.c.first <= b.c.last && b.c.first <= a.c.last && (inAnyPool(a) || inAnyPool(b))) {
+        conflicts.push({ kind: 'overlap', text: `Sieci ${a.cidr} („${a.name}”, ${a.site}) i ${b.cidr} („${b.name}”, ${b.site}) nakładają się` });
+      }
+    }
+    const vlans = all('SELECT v.*, s.name AS site FROM vlans v LEFT JOIN sites s ON s.id=v.site_id WHERE v.tenant_id=? ORDER BY v.vid, v.site_id', tenant.id);
+    const uses = (v, n) => n.vlan === v.vid && (v.site_id == null || v.site_id === n.site_id);
+    const unregistered = [...new Set(nets.filter((n) => n.vlan && !vlans.some((v) => uses(v, n))).map((n) => n.vlan))].sort((a, b) => a - b)
+      .map((vid) => ({ vid, networks: nets.filter((n) => n.vlan === vid).map(pub) }));
+    return {
+      tenant: { id: tenant.id, name: tenant.name }, role: auth.effectiveTenant(auth.rolesOf(user.id), tenant.id),
+      sites: all('SELECT id, name FROM sites WHERE tenant_id=? ORDER BY name COLLATE NOCASE', tenant.id),
+      pools: out, unpooled: nets.filter((n) => !inAnyPool(n)).map(pub), conflicts,
+      vlans: vlans.map((v) => ({ ...v, networks: nets.filter((n) => uses(v, n)).map(pub) })), unregistered,
+    };
+  });
+
+  route('POST', '/api/tenants/:id/pools', ({ params, body, user }) => unique(() => {
+    must(one('SELECT id FROM tenants WHERE id=?', params.id), 'Tenant');
+    needTenant(user, Number(params.id), 'admin');
+    const p = poolInput(body, Number(params.id));
+    const r = run('INSERT INTO pools (tenant_id, name, cidr, description) VALUES (?,?,?,?)', params.id, p.name, p.cidr, p.description);
+    log('create', 'pool', `${p.cidr}${p.name ? ` (${p.name})` : ''}`);
+    return { id: Number(r.lastInsertRowid), tenant_id: Number(params.id), ...p };
+  }));
+  route('PUT', '/api/pools/:id', ({ params, body, user }) => unique(() => {
+    const old = must(one('SELECT * FROM pools WHERE id=?', params.id), 'Pula');
+    needTenant(user, old.tenant_id, 'admin');
+    const p = poolInput(body, old.tenant_id, old.id);
+    run('UPDATE pools SET name=?, cidr=?, description=? WHERE id=?', p.name, p.cidr, p.description, old.id);
+    log('update', 'pool', `${p.cidr}${p.name ? ` (${p.name})` : ''}`);
+    return { id: old.id, tenant_id: old.tenant_id, ...p };
+  }));
+  route('DELETE', '/api/pools/:id', ({ params, user }) => {
+    const p = must(one('SELECT * FROM pools WHERE id=?', params.id), 'Pula');
+    needTenant(user, p.tenant_id, 'admin');
+    run('DELETE FROM pools WHERE id=?', p.id);     // the networks carved out of it stay untouched
+    log('delete', 'pool', p.cidr);
+    return { ok: true };
+  });
+  route('GET', '/api/pools/:id/suggest', ({ params, query, user }) => {
+    const p = must(one('SELECT * FROM pools WHERE id=?', params.id), 'Pula');
+    needTenant(user, p.tenant_id, 'reader');
+    const prefix = Number(query.prefix);
+    const pc = parseCidr(p.cidr);
+    if (!Number.isInteger(prefix) || prefix < Math.max(16, pc.prefix) || prefix > 30) throw bad('Nieprawidłowa długość prefiksu (16–30, nie mniej niż pula)');
+    const cidr = findFree(pc, tenantNets(p.tenant_id).map((n) => n.c), prefix);
+    if (!cidr) throw new HttpError(404, `W puli ${p.cidr} nie ma wolnego bloku /${prefix}`);
+    return { cidr };
+  });
+  // Carves a subnet out of a pool and creates it as a network of the chosen location.
+  route('POST', '/api/pools/:id/allocate', ({ params, body, user }) => unique(() => {
+    const p = must(one('SELECT * FROM pools WHERE id=?', params.id), 'Pula');
+    const site = must(one('SELECT * FROM sites WHERE id=? AND tenant_id=?', body.site_id, p.tenant_id), 'Lokalizacja');
+    need(user, site.id, 'admin');
+    const pc = parseCidr(p.cidr);
+    let cidr = body.cidr ? normalizeCidr(body.cidr) : null;
+    if (!cidr) {
+      const prefix = Number(body.prefix);
+      if (!Number.isInteger(prefix) || prefix < Math.max(16, pc.prefix) || prefix > 30) throw bad('Podaj CIDR albo prefiks 16–30');
+      cidr = findFree(pc, tenantNets(p.tenant_id).map((n) => n.c), prefix);
+      if (!cidr) throw new HttpError(404, `W puli ${p.cidr} nie ma wolnego bloku /${prefix}`);
+    }
+    const c = parseCidr(cidr);
+    if (c.first < pc.first || c.last > pc.last) throw bad(`Blok ${cidr} leży poza pulą ${p.cidr}`);
+    const clash = tenantNets(p.tenant_id).find((o) => c.first <= o.c.last && o.c.first <= c.last);
+    if (clash) throw new HttpError(409, `Blok ${cidr} nakłada się z siecią „${clash.name}” (${clash.cidr}, ${clash.site_name})`);
+    const n = netInput({ gateway: 'first', ...body, cidr });
+    const r = run(`INSERT INTO networks (site_id, name, cidr, vlan, gateway, dhcp_start, dhcp_end, dns, description, auto_scan)
+      VALUES (?,?,?,?,?,?,?,?,?,?)`, site.id, n.name, n.cidr, n.vlan, n.gateway, n.dhcp_start, n.dhcp_end, n.dns, n.description, n.auto_scan);
+    log('create', 'network', `${n.name} (${n.cidr}) z puli ${p.cidr}`);
+    return { id: Number(r.lastInsertRowid), site_id: site.id, ...n };
+  }));
+
+  function vlanInput(b, tenantId, selfId = null) {
+    const vid = Number(b.vid);
+    if (!Number.isInteger(vid) || vid < 1 || vid > 4094) throw bad('VLAN musi być w zakresie 1–4094');
+    const name = str(b.name, 80);
+    if (!name) throw bad('Nazwa VLAN-u jest wymagana');
+    let site_id = null;
+    if (b.site_id !== '' && b.site_id != null) {
+      site_id = Number(b.site_id);
+      must(one('SELECT id FROM sites WHERE id=? AND tenant_id=?', site_id, tenantId), 'Lokalizacja');
+    }
+    // A VLAN id is either global for the tenant or defined per location, never both.
+    const clash = all('SELECT * FROM vlans WHERE tenant_id=? AND vid=? AND id!=?', tenantId, vid, selfId ?? 0)
+      .find((o) => o.site_id == null || site_id == null || o.site_id === site_id);
+    if (clash) throw new HttpError(409, `VLAN ${vid} jest już zdefiniowany („${clash.name}”)${clash.site_id == null ? ' dla całego tenanta' : ' dla tej lokalizacji'}`);
+    return { vid, name, site_id, description: str(b.description) };
+  }
+  route('POST', '/api/tenants/:id/vlans', ({ params, body, user }) => unique(() => {
+    must(one('SELECT id FROM tenants WHERE id=?', params.id), 'Tenant');
+    needTenant(user, Number(params.id), 'admin');
+    const v = vlanInput(body, Number(params.id));
+    const r = run('INSERT INTO vlans (tenant_id, site_id, vid, name, description) VALUES (?,?,?,?,?)', params.id, v.site_id, v.vid, v.name, v.description);
+    log('create', 'vlan', `${v.vid} ${v.name}`);
+    return { id: Number(r.lastInsertRowid), tenant_id: Number(params.id), ...v };
+  }));
+  route('PUT', '/api/vlans/:id', ({ params, body, user }) => unique(() => {
+    const old = must(one('SELECT * FROM vlans WHERE id=?', params.id), 'VLAN');
+    needTenant(user, old.tenant_id, 'admin');
+    const v = vlanInput(body, old.tenant_id, old.id);
+    run('UPDATE vlans SET vid=?, name=?, site_id=?, description=? WHERE id=?', v.vid, v.name, v.site_id, v.description, old.id);
+    log('update', 'vlan', `${v.vid} ${v.name}`);
+    return { id: old.id, tenant_id: old.tenant_id, ...v };
+  }));
+  route('DELETE', '/api/vlans/:id', ({ params, user }) => {
+    const v = must(one('SELECT * FROM vlans WHERE id=?', params.id), 'VLAN');
+    needTenant(user, v.tenant_id, 'admin');
+    run('DELETE FROM vlans WHERE id=?', v.id);
+    log('delete', 'vlan', `${v.vid} ${v.name}`);
+    return { ok: true };
   });
 
   // ---------- consistency checks ----------

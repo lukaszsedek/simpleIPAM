@@ -172,6 +172,25 @@ function openRaw(path) {
       role TEXT NOT NULL CHECK (role IN ('admin','contributor','reader','none')),
       CHECK (tenant_id IS NULL OR site_id IS NULL)
     );
+    -- Address space planning: a pool is a big block (10.0.0.0/8) a tenant hands out to its sites as subnets;
+    -- the VLAN registry (site_id NULL = valid in every site of the tenant). networks.vlan stays a plain number that is matched to it.
+    CREATE TABLE IF NOT EXISTS pools (
+      id INTEGER PRIMARY KEY,
+      tenant_id INTEGER NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+      name TEXT NOT NULL DEFAULT '',
+      cidr TEXT NOT NULL,
+      description TEXT NOT NULL DEFAULT '',
+      UNIQUE (tenant_id, cidr)
+    );
+    CREATE TABLE IF NOT EXISTS vlans (
+      id INTEGER PRIMARY KEY,
+      tenant_id INTEGER NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+      site_id INTEGER REFERENCES sites(id) ON DELETE CASCADE,
+      vid INTEGER NOT NULL CHECK (vid BETWEEN 1 AND 4094),
+      name TEXT NOT NULL,
+      description TEXT NOT NULL DEFAULT ''
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_vlans_unique ON vlans(tenant_id, COALESCE(site_id, 0), vid);
     CREATE UNIQUE INDEX IF NOT EXISTS idx_roles_unique ON role_assignments(user_id, COALESCE(tenant_id, 0), COALESCE(site_id, 0));
   `);
   const addColumn = (table, col, ddl) => {
@@ -190,6 +209,8 @@ function openRaw(path) {
   addColumn('discovered', 'name', "TEXT NOT NULL DEFAULT ''");   // device name reported by an integration (UniFi)
   addColumn('discovered', 'mac', "TEXT NOT NULL DEFAULT ''");
   addColumn('users', 'has_password', 'INTEGER NOT NULL DEFAULT 1');   // 0 = created through Google, password never chosen
+  addColumn('networks', 'gateway_mac', "TEXT NOT NULL DEFAULT ''");   // MAC a scan saw at the gateway address
+  addColumn('networks', 'gateway_seen', 'TEXT');
   addColumn('networks', 'auto_scan', 'INTEGER NOT NULL DEFAULT 0');
   if (!db.prepare('PRAGMA table_info(audit)').all().some((c) => c.name === 'actor')) {
     db.exec("ALTER TABLE audit ADD COLUMN actor TEXT NOT NULL DEFAULT ''");
