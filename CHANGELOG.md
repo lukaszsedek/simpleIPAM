@@ -5,6 +5,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-11-14
+
 ### Added
 - Entries have an **alias** (friendly device name). UniFi → simpleIPAM sync: a client renamed in UniFi updates the alias; the alias last seen in UniFi is remembered, so a change made only in simpleIPAM is kept and, when both sides changed, simpleIPAM wins (reported as a conflict in the sync summary).
 - "Sprawdź zapis do UniFi": a read-only probe showing whether the API key reaches the classic Network API where UniFi keeps client aliases (groundwork for writing aliases back to UniFi).
