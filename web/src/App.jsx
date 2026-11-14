@@ -121,9 +121,10 @@ function FreeBlock({ siteId, onPick, notify }) {
 }
 
 function PasswordForm({ onClose, notify, me, googleReady }) {
-  const [f, setF] = useState({ current: '', password: '' });
+  const [f, setF] = useState({ current: '', password: '', confirm: '' });
   const submit = async (e) => {
     e.preventDefault();
+    if (f.password !== f.confirm) return notify(tx('Hasła nie są takie same'), 'error');
     try { await api.changePassword(f.current, f.password); notify('Hasło zostało zmienione'); onClose(); if (!me.has_password) setTimeout(() => location.reload(), 600); }
     catch (err) { notify(err.message, 'error'); }
   };
@@ -132,6 +133,7 @@ function PasswordForm({ onClose, notify, me, googleReady }) {
       <form class="form-grid" onSubmit={submit}>
         {me.has_password && <Field label="Aktualne hasło" span><input type="password" autocomplete="current-password" value={f.current} onInput={(e) => setF({ ...f, current: e.target.value })} required /></Field>}
         <Field label="Nowe hasło" hint="min. 8 znaków" span><input type="password" autocomplete="new-password" minLength={8} value={f.password} onInput={(e) => setF({ ...f, password: e.target.value })} required /></Field>
+        <Field label="Powtórz hasło" span><input type="password" autocomplete="new-password" minLength={8} value={f.confirm} onInput={(e) => setF({ ...f, confirm: e.target.value })} required /></Field>
         <footer><button type="button" class="btn ghost" onClick={onClose}>{tx('Anuluj')}</button><button class="btn primary">{tx('Zmień')}</button></footer>
       </form>
       {googleReady && (

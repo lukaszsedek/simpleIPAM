@@ -11,8 +11,10 @@ const RoleSelect = ({ value, onChange, allowNone = true, ...rest }) => (
 
 function PasswordModal({ target, onClose, notify }) {
   const [pw, setPw] = useState('');
+  const [pw2, setPw2] = useState('');
   const submit = async (e) => {
     e.preventDefault();
+    if (pw !== pw2) return notify(t('Hasła nie są takie same'), 'error');
     try { await api.setUserPassword(target.id, pw); notify('Hasło zostało zmienione'); onClose(); }
     catch (err) { notify(err.message, 'error'); }
   };
@@ -21,6 +23,7 @@ function PasswordModal({ target, onClose, notify }) {
       <form class="form-grid" onSubmit={submit}>
         <Field label="Nowe hasło" hint="min. 8 znaków; użytkownik zostanie wylogowany" span>
           <input type="password" autocomplete="new-password" value={pw} onInput={(e) => setPw(e.target.value)} required minLength={8} /></Field>
+        <Field label="Powtórz hasło" span><input type="password" autocomplete="new-password" value={pw2} onInput={(e) => setPw2(e.target.value)} required minLength={8} /></Field>
         <footer><button type="button" class="btn ghost" onClick={onClose}>{t('Anuluj')}</button><button class="btn primary">{t('Zmień')}</button></footer>
       </form>
     </Modal>

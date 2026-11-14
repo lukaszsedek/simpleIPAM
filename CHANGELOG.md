@@ -5,6 +5,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+### Changed
+- Changing a password (your own or another user's) asks for the new password twice; your own also still requires the current one.
+
 ## [0.10.0] - 2026-11-14
 
 ### Added
