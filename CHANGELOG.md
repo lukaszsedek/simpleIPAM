@@ -5,6 +5,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-11-14
+
 ### Added
 - **Export to Excel** (`.xlsx`): one network from the Export menu, or every network you can read as one workbook (a sheet per network, also on the home page). Labels follow the interface language; written without any library.
 - **"To review" page** in the sidebar: every warning from every network in one list (errors first, filterable), with a counter in the sidebar and on each network.
