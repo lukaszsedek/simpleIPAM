@@ -5,6 +5,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+### Added
+- Entries can have a "Ważny do" (valid until) date; expired or soon-expiring entries appear under "Do sprawdzenia".
+- Growth forecast: a network over 90% full, or on course to run out within 180 days, is flagged under "Do sprawdzenia".
+
 ## [0.6.0] - 2026-11-14
 
 ### Added

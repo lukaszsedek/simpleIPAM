@@ -100,3 +100,16 @@ test('neighbour table parsers: Linux /proc/net/arp and macOS/BSD arp -an', () =>
   const bsd = '? (192.168.1.1) at a:b:c:d:e:f on en0 ifscope [ethernet]\n? (192.168.1.9) at (incomplete) on en0 ifscope [ethernet]\n? (224.0.0.251) at 1:0:5e:0:0:fb on en0 ifscope permanent [ethernet]\n';
   assert.deepEqual([...parseArpAn(bsd)], [['192.168.1.1', '0a:0b:0c:0d:0e:0f'], ['224.0.0.251', '01:00:5e:00:00:fb']]);
 });
+
+test('expiring entries and a nearly full network show up in issues', async () => {
+  const { admin, net } = await setup();   // /28 = 14 usable addresses
+  await admin('POST', `/api/networks/${net.id}/entries`, { ip: '10.0.0.2', fqdn: 'guest.lan', expires_at: '2000-01-01' });
+  await admin('POST', `/api/networks/${net.id}/entries`, { ip: '10.0.0.3', fqdn: 'later.lan', expires_at: '2999-01-01' });
+  await assert.rejects(admin('POST', `/api/networks/${net.id}/entries`, { ip: '10.0.0.4', expires_at: 'jutro' }), /data ważności/);
+  let issues = await admin('GET', `/api/networks/${net.id}/issues`);
+  assert.ok(issues.some((i) => /guest.lan/.test(i.text) && /wygasł/.test(i.text)));
+  assert.ok(!issues.some((i) => /later.lan/.test(i.text)));
+  for (let i = 4; i <= 14; i++) await admin('POST', `/api/networks/${net.id}/entries`, { ip: `10.0.0.${i}` });
+  issues = await admin('GET', `/api/networks/${net.id}/issues`);
+  assert.ok(issues.some((i) => /zajęta w \d+%/.test(i.text)));
+});

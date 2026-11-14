@@ -111,11 +111,13 @@ export function createApi(db, opts = {}) {
     const tags = str(b.tags, 200).split(',').map((t) => t.trim().toLowerCase()).filter(Boolean).join(',');
     const dup = one('SELECT id FROM entries WHERE network_id=? AND ip=?', net.id, ip);
     if (dup && dup.id !== existingId) throw new HttpError(409, `Adres ${ip} jest już wpisany w tej sieci`);
-    return { ip, ip_num: n, fqdn, alias: str(b.alias, 100), mac, type, status, tags, description: str(b.description) };
+    const expires_at = str(b.expires_at, 10);
+    if (expires_at && !(/^\d{4}-\d{2}-\d{2}$/.test(expires_at) && !Number.isNaN(Date.parse(expires_at)))) throw bad('Nieprawidłowa data ważności (RRRR-MM-DD)');
+    return { ip, ip_num: n, fqdn, alias: str(b.alias, 100), mac, type, status, tags, description: str(b.description), expires_at };
   }
 
   // ---------- entry history ----------
-  const FIELDS = ['ip', 'fqdn', 'alias', 'mac', 'type', 'status', 'tags', 'description'];
+  const FIELDS = ['ip', 'fqdn', 'alias', 'mac', 'type', 'status', 'tags', 'description', 'expires_at'];
   const hist = (netId, entryId, ip, action, changes, who = actor) => {
     if (!Object.keys(changes).length) return;
     run('INSERT INTO entry_history (network_id, entry_id, ip, action, changes, actor) VALUES (?,?,?,?,?,?)', netId, entryId, ip, action, JSON.stringify(changes), who);
@@ -333,8 +335,8 @@ export function createApi(db, opts = {}) {
     const net = must(one('SELECT * FROM networks WHERE id=?', params.id), 'Sieć');
     need(user, net.site_id, 'contributor');
     const e = entryInput(body, net);
-    const r = run(`INSERT INTO entries (network_id, ip, ip_num, fqdn, alias, mac, type, status, tags, description)
-      VALUES (?,?,?,?,?,?,?,?,?,?)`, net.id, e.ip, e.ip_num, e.fqdn, e.alias, e.mac, e.type, e.status, e.tags, e.description);
+    const r = run(`INSERT INTO entries (network_id, ip, ip_num, fqdn, alias, mac, type, status, tags, description, expires_at)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?)`, net.id, e.ip, e.ip_num, e.fqdn, e.alias, e.mac, e.type, e.status, e.tags, e.description, e.expires_at);
     const seen = one('SELECT mac FROM discovered WHERE network_id=? AND ip=?', net.id, e.ip)?.mac ?? '';
     run('DELETE FROM discovered WHERE network_id=? AND ip=?', net.id, e.ip);
     if (seen) run('UPDATE entries SET seen_mac=? WHERE id=?', seen, r.lastInsertRowid);
@@ -348,8 +350,9 @@ export function createApi(db, opts = {}) {
     need(user, net.site_id, 'contributor');
     const e = entryInput(body, net, old.id);
     if (body.alias === undefined) e.alias = old.alias;                      // API clients that do not know the field keep it
-    run(`UPDATE entries SET ip=?, ip_num=?, fqdn=?, alias=?, mac=?, type=?, status=?, tags=?, description=?,
-      updated_at=datetime('now') WHERE id=?`, e.ip, e.ip_num, e.fqdn, e.alias, e.mac, e.type, e.status, e.tags, e.description, old.id);
+    if (body.expires_at === undefined) e.expires_at = old.expires_at;
+    run(`UPDATE entries SET ip=?, ip_num=?, fqdn=?, alias=?, mac=?, type=?, status=?, tags=?, description=?, expires_at=?,
+      updated_at=datetime('now') WHERE id=?`, e.ip, e.ip_num, e.fqdn, e.alias, e.mac, e.type, e.status, e.tags, e.description, e.expires_at, old.id);
     hist(old.network_id, old.id, e.ip, 'update', diff(old, e));
     log('update', 'entry', `${e.ip} ${e.fqdn}`.trim());
     if (e.alias !== old.alias) pushAliasSoon(old.id);
@@ -535,6 +538,25 @@ export function createApi(db, opts = {}) {
       const [a, b] = [ipToInt(net.dhcp_start), ipToInt(net.dhcp_end)];
       for (const e of entries) if (e.ip_num >= a && e.ip_num <= b && e.status !== 'free') {
         issues.push({ level: 'info', text: `${e.ip} (${e.fqdn || 'bez nazwy'}) leży w puli DHCP — rozważ rezerwację DHCP lub zawężenie puli` });
+      }
+    }
+    const today = new Date().toISOString().slice(0, 10);
+    const soon = new Date(Date.now() + 14 * 864e5).toISOString().slice(0, 10);
+    for (const e of entries) if (e.expires_at && e.status !== 'free' && e.expires_at <= soon) {
+      issues.push({ level: e.expires_at < today ? 'warn' : 'info', text: `${e.ip} (${e.alias || e.fqdn || 'bez nazwy'}): ${e.expires_at < today ? 'wpis wygasł' : 'wpis wygasa'} ${e.expires_at} — usuń go lub przedłuż ważność` });
+    }
+    // Growth forecast: addresses taken per day over the last 60 days (from the history of created entries) vs. what is left.
+    {
+      const c = parseCidr(net.cidr);
+      const cap = Math.max(0, c.last - c.first - 1);
+      const used = entries.filter((e) => e.status !== 'free').length;
+      const added = one(`SELECT COUNT(*) AS n FROM entry_history WHERE network_id=? AND action='create' AND ts >= datetime('now','-60 days')`, net.id).n;
+      const left = cap - used;
+      if (cap > 0 && left <= 0) issues.push({ level: 'error', text: 'Sieć jest zapełniona — brak wolnych adresów' });
+      else if (cap > 0 && used / cap >= 0.9) issues.push({ level: 'warn', text: `Sieć zajęta w ${Math.round(100 * used / cap)}% — zostało ${left} adresów` });
+      else if (added >= 3 && left > 0) {
+        const days = Math.round(left / (added / 60));
+        if (days <= 180) issues.push({ level: 'info', text: `Przy obecnym tempie (${added} nowych wpisów w 60 dni) wolne adresy skończą się za ok. ${days} dni` });
       }
     }
     const me = parseCidr(net.cidr);

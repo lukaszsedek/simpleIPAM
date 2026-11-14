@@ -55,6 +55,7 @@ function EntryForm({ net, entry, onClose, onSaved, notify }) {
         </Field>
         <Field label="Tagi" hint="rozdzielone przecinkami"><input value={f.tags ?? ''} onInput={set('tags')} placeholder="iot, kuchnia" /></Field>
         <Field label="Opis" span><input value={f.description ?? ''} onInput={set('description')} /></Field>
+        <Field label="Ważny do"><input type="date" value={f.expires_at ?? ''} onInput={set('expires_at')} /></Field>
         <footer>
           <button type="button" class="btn ghost" onClick={onClose}>Anuluj</button>
           <button class="btn primary" disabled={busy}>Zapisz</button>
@@ -90,7 +91,7 @@ function ScanModal({ net, onClose, onAdd }) {
   );
 }
 
-const FIELD_LABELS = { ip: 'IP', fqdn: 'FQDN', alias: 'Alias', mac: 'MAC', type: 'Typ', status: 'Status', tags: 'Tagi', description: 'Opis' };
+const FIELD_LABELS = { ip: 'IP', fqdn: 'FQDN', alias: 'Alias', mac: 'MAC', type: 'Typ', status: 'Status', tags: 'Tagi', description: 'Opis', expires_at: 'Ważny do' };
 const show = (k, v) => (v === '' || v == null ? '∅' : k === 'type' ? TYPE_LABELS[v] ?? v : k === 'status' ? STATUS_LABELS[v] ?? v : v);
 const ACTIONS = { create: 'dodano', update: 'zmieniono', delete: 'usunięto', mac_seen: 'zauważył inny MAC', mac_ignored: 'zignorowano MAC', pushed: 'wysłano alias do UniFi' };
 
