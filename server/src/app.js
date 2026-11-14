@@ -7,6 +7,7 @@ import { snapshotBuffer, backupName, listLocal, isBackupName, loadConfig, saveCo
 import * as gd from './gdrive.js';
 import * as gl from './google-login.js';
 import { isEncrypted, decrypt } from './backup-crypto.js';
+import { buildOpenApi, DOCS_HTML } from './openapi.js';
 import { readFileSync, rmSync, existsSync, writeFileSync, copyFileSync, mkdirSync, readdirSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import { summarize, validateAndPrepare } from './restore.js';
@@ -181,7 +182,7 @@ export function createApi(db, opts = {}) {
   const route = (method, pattern, handler, opts = {}) => {
     const keys = [];
     const re = new RegExp('^' + pattern.replace(/:(\w+)/g, (_, k) => { keys.push(k); return '([^/]+)'; }) + '$');
-    routes.push({ method, re, keys, handler, public: !!opts.public });
+    routes.push({ method, pattern, re, keys, handler, public: !!opts.public });
   };
 
   route('GET', '/api/overview', ({ user }) => {
@@ -909,5 +910,8 @@ export function createApi(db, opts = {}) {
     throw new HttpError(404, 'Nie znaleziono');
   }
 
-  return Object.assign(handle, { runScheduledScans, runDailyBackup: () => runDailyIfDue(db, bdeps()) });
+  route('GET', '/api/openapi.json', () => buildOpenApi(routes, { version: opts.version }), { public: true });
+  route('GET', '/api/docs', () => ({ raw: DOCS_HTML, contentType: 'text/html; charset=utf-8', inline: true }), { public: true });
+
+  return Object.assign(handle, { routes, runScheduledScans, runDailyBackup: () => runDailyIfDue(db, bdeps()) });
 }

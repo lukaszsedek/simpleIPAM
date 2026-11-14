@@ -156,7 +156,7 @@ function Tokens({ onClose, notify }) {
   };
   return (
     <Modal title="Tokeny API" onClose={onClose} wide>
-      <p class="muted small-text">Token działa jak Ty (te same role). Użyj go w nagłówku <span class="mono">Authorization: Bearer …</span>.</p>
+      <p class="muted small-text">Token działa jak Ty (te same role). Użyj go w nagłówku <span class="mono">Authorization: Bearer …</span>. Opis wszystkich endpointów: <a href="/api/docs" target="_blank" rel="noreferrer">dokumentacja API</a> (<a href="/api/openapi.json" target="_blank" rel="noreferrer">OpenAPI</a>).</p>
       {fresh && (
         <div class="token-new">
           <span>Skopiuj teraz — nie zobaczysz go ponownie:</span>

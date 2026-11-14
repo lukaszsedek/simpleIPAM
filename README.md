@@ -117,6 +117,10 @@ Panel administratora → **Kopie zapasowe**: ikona zegara przy kopii na liście 
 2. Pokazuje porównanie „teraz → po przywróceniu” oraz ostrzeżenia, np. gdy w kopii nie ma żadnego globalnego administratora albo Twojego konta.
 3. Po potwierdzeniu zapisuje **kopię bezpieczeństwa obecnego stanu** (na liście kopii — jej przywrócenie cofa operację), podmienia bazę bez restartu i wylogowuje wszystkich.
 
+### API
+
+Dokumentacja wszystkich endpointów jest w aplikacji: `/api/docs` (czytelna strona) i `/api/openapi.json` (OpenAPI 3, do importu w Postmanie/Insomnii lub generatorach klientów). Uwierzytelnianie tokenem: `Authorization: Bearer ipam_…` (tokeny tworzysz w aplikacji).
+
 ### Logowanie przez Google
 
 Administracja → Ustawienia → „Logowanie przez Google”. Utwórz w Google Cloud Console klienta OAuth typu „Aplikacja internetowa” z adresem przekierowania `<adres aplikacji>/api/auth/google/callback` (https lub localhost) i wpisz Client ID/Secret. Nowe konta Google powstają bez uprawnień (rola None) i podlegają przełącznikowi „Otwarta rejestracja”; istniejące konto łączysz z Google w oknie „Zmiana hasła”. Pierwszy administrator zawsze powstaje lokalnie.

@@ -115,7 +115,7 @@ createServer(async (req, res) => {
         res.writeHead(302, { ...headers, location: out.redirect });
         res.end();
       } else if (out?.raw !== undefined) {
-        res.writeHead(200, { ...headers, 'content-type': out.contentType, 'content-disposition': `attachment; filename="${out.filename}"` });
+        res.writeHead(200, { ...headers, 'content-type': out.contentType, ...(out.inline ? {} : { 'content-disposition': `attachment; filename="${out.filename}"` }) });
         res.end(out.raw);
       } else {
         res.writeHead(200, { ...headers, 'content-type': 'application/json' });
