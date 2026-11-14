@@ -5,6 +5,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+### Added
+- DHCP reservations to UniFi: entries with status "Reserved" and a MAC can be pushed as fixed IPs of the matching known UniFi client (preview first; same safety rules as the alias push).
+- "DNS" check on a network: resolves every FQDN and lists the entries with a missing or different A record.
+
 ## [0.7.0] - 2026-11-14
 
 ### Added

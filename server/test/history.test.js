@@ -10,13 +10,14 @@ const client = (api) => {
 };
 async function setup() {
   const alive = new Set(), arp = new Map();
-  const api = createApi(openDb(':memory:'), { ping: async (ip) => alive.has(ip), neighbors: async () => new Map(arp) });
+  const dns = new Map();
+  const api = createApi(openDb(':memory:'), { ping: async (ip) => alive.has(ip), neighbors: async () => new Map(arp), resolve: async (n) => { if (!dns.has(n)) throw new Error('ENOTFOUND'); return dns.get(n); } });
   const admin = client(api);
   await admin('POST', '/api/auth/register', { username: 'admin', password: 'password123' });
   const t = await admin('POST', '/api/tenants', { name: 'home' });
   const site = await admin('POST', `/api/tenants/${t.id}/sites`, { name: 'dom' });
   const net = await admin('POST', `/api/sites/${site.id}/networks`, { name: 'lan', cidr: '10.0.0.0/28' });
-  return { api, admin, alive, arp, net };
+  return { api, admin, alive, arp, net, dns };
 }
 
 test('entry history records create/update/delete with old and new values and who did it', async () => {
@@ -112,4 +113,13 @@ test('expiring entries and a nearly full network show up in issues', async () =>
   for (let i = 4; i <= 14; i++) await admin('POST', `/api/networks/${net.id}/entries`, { ip: `10.0.0.${i}` });
   issues = await admin('GET', `/api/networks/${net.id}/issues`);
   assert.ok(issues.some((i) => /zajęta w \d+%/.test(i.text)));
+});
+
+test('DNS check reports missing and mismatching records', async () => {
+  const { admin, net, dns } = await setup();
+  for (const [ip, fqdn] of [['10.0.0.2', 'ok.lan'], ['10.0.0.3', 'moved.lan'], ['10.0.0.4', 'gone.lan']]) await admin('POST', `/api/networks/${net.id}/entries`, { ip, fqdn });
+  dns.set('ok.lan', ['10.0.0.2']); dns.set('moved.lan', ['10.0.0.99']);
+  const r = await admin('POST', `/api/networks/${net.id}/dns-check`);
+  assert.deepEqual(r.results.map((x) => x.result), ['ok', 'mismatch', 'missing']);
+  assert.deepEqual([r.checked, r.problems, r.results[1].resolved], [3, 2, ['10.0.0.99']]);
 });

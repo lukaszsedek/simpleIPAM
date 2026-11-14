@@ -9,6 +9,7 @@ import * as gl from './google-login.js';
 import { isEncrypted, decrypt } from './backup-crypto.js';
 import { buildOpenApi, DOCS_HTML } from './openapi.js';
 import { readNeighbors } from './neighbors.js';
+import { lookup } from 'node:dns/promises';
 import * as unifi from './unifi.js';
 import { readFileSync, rmSync, existsSync, writeFileSync, copyFileSync, mkdirSync, readdirSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
@@ -147,6 +148,8 @@ export function createApi(db, opts = {}) {
     return null;
   }
 
+  // Forward DNS lookup (IPv4 only, honours /etc/hosts and search domains); tests inject a fake.
+  const resolveA = opts.resolve ?? (async (name) => (await lookup(name, { all: true, family: 4 })).map((a) => a.address));
   const ping = opts.ping ?? ((ip) => new Promise((resolve) => {
     execFile('ping', ['-c', '1', '-W', '1', ip], { timeout: 3000 }, (err) => resolve(!err));
   }));
@@ -324,6 +327,22 @@ export function createApi(db, opts = {}) {
     need(user, n.site_id, 'reader');
     return { ip: nextFree(n, query.from ? ipToInt(query.from) : null) };
   });
+  // Compares each entry's FQDN with what DNS actually answers; a lookup is a read, so Reader is enough.
+  route('POST', '/api/networks/:id/dns-check', async ({ params, user }) => {
+    const net = must(one('SELECT * FROM networks WHERE id=?', params.id), 'Sieć');
+    need(user, net.site_id, 'reader');
+    const rows = all("SELECT ip, fqdn FROM entries WHERE network_id=? AND fqdn!='' AND status!='free' ORDER BY ip_num LIMIT 500", net.id);
+    const results = [];
+    for (let i = 0; i < rows.length; i += 10) {
+      results.push(...await Promise.all(rows.slice(i, i + 10).map(async (e) => {
+        let resolved = [];
+        try { resolved = (await resolveA(e.fqdn)).slice(0, 8); } catch { /* NXDOMAIN and friends = no record */ }
+        return { ip: e.ip, fqdn: e.fqdn, resolved, result: !resolved.length ? 'missing' : resolved.includes(e.ip) ? 'ok' : 'mismatch' };
+      })));
+    }
+    return { checked: results.length, problems: results.filter((r) => r.result !== 'ok').length, results };
+  });
+
   route('POST', '/api/networks/:id/scan', async ({ params, user }) => {
     const n = must(one('SELECT * FROM networks WHERE id=?', params.id), 'Sieć');
     need(user, n.site_id, 'contributor');
@@ -1090,6 +1109,45 @@ export function createApi(db, opts = {}) {
     return out;
   }
 
+  // DHCP reservations: entries marked "reserved" with a MAC become fixed IPs of the matching known UniFi client. Same safety
+  // rules as the alias push: known clients only, nothing is created, capped per run, previewable.
+  async function unifiReserveSite(c, siteRow, { dry = false } = {}) {
+    const out = { site: siteRow.name, planned: [], pushed: 0, skipped: [], errors: [] };
+    const cands = all(`SELECT e.*, n.cidr AS net_cidr FROM entries e JOIN networks n ON n.id=e.network_id
+      WHERE n.site_id=? AND e.status='reserved' AND e.mac!='' ORDER BY e.ip_num`, siteRow.id);
+    if (!cands.length) return out;
+    try {
+      const siteName = await unifi.classicSiteName(c, siteRow.unifi_host, { internalReference: siteRow.unifi_site, name: siteRow.unifi_site_name }, uDeps());
+      const known = await unifi.knownClients(c, siteRow.unifi_host, siteName, uDeps());
+      const nets = await unifi.classicNetworks(c, siteRow.unifi_host, siteName, uDeps());
+      for (const e of cands) {
+        const k = known.get(e.mac.toLowerCase());
+        if (!k) { out.skipped.push({ ip: e.ip, reason: 'UniFi nie zna tego klienta (brak go na liście znanych urządzeń)' }); continue; }
+        const net = nets.find((n) => n.cidr === normalizeCidr(e.net_cidr));
+        if (!net) { out.skipped.push({ ip: e.ip, reason: 'UniFi nie ma sieci o tym CIDR' }); continue; }
+        if (k.fixed && k.fixed_ip === e.ip) continue;                        // already reserved
+        out.planned.push({ ip: e.ip, mac: e.mac, from: k.fixed ? k.fixed_ip : '', to: e.ip });
+        if (dry) continue;
+        if (out.pushed >= PUSH_CAP) { out.skipped.push({ ip: e.ip, reason: 'limit zapisów na jedno uruchomienie — reszta przy następnej synchronizacji' }); continue; }
+        await unifi.setFixedIp(c, siteRow.unifi_host, siteName, k.id, e.ip, net.id, uDeps());
+        hist(e.network_id, e.id, e.ip, 'pushed', { reservation: [k.fixed ? k.fixed_ip : '', e.ip] }, 'unifi');
+        out.pushed++;
+      }
+    } catch (err) { out.errors.push(err.message); }
+    return out;
+  }
+  async function unifiReserve({ dry = false } = {}) {
+    const c = unifiCfg();
+    if (!c.api_key) throw bad('Najpierw zapisz klucz API');
+    const hosts = new Set(c.consoles.filter((x) => x.enabled).map((x) => x.id));
+    const sites = all("SELECT * FROM sites WHERE unifi_host!=''").filter((s) => hosts.has(s.unifi_host));
+    if (!sites.length) throw bad('Brak lokalizacji zaimportowanych z UniFi — najpierw wykonaj synchronizację');
+    const results = [];
+    for (const s of sites) results.push(await unifiReserveSite(c, s, { dry }));
+    const pushed = results.reduce((n, r) => n + r.pushed, 0);
+    if (!dry && pushed > 0 && !c.write_verified) { c.write_verified = true; saveSetting('unifi', c); }
+    return { at: new Date().toISOString(), dry, ok: results.every((r) => !r.errors.length), pushed, results };
+  }
   async function unifiPush({ dry = false } = {}) {
     const c = unifiCfg();
     if (!c.api_key) throw bad('Najpierw zapisz klucz API');
@@ -1108,6 +1166,15 @@ export function createApi(db, opts = {}) {
     try {
       const r = await unifiPush({ dry: !!body.dry_run });
       if (!r.dry && r.pushed) { actor = user.username; log('update', 'settings', `aliasy wysłane do UniFi: ${r.pushed}`); }
+      return r;
+    } catch (e) { uFail(e); }
+  });
+  route('POST', '/api/admin/unifi/reserve', async ({ body, user, ctx }) => {
+    needGlobalAdmin(user); sessionOnly(ctx);
+    actor = user.username;
+    try {
+      const r = await unifiReserve({ dry: !!body.dry_run });
+      if (!r.dry && r.pushed) log('update', 'settings', `rezerwacje DHCP wysłane do UniFi: ${r.pushed}`);
       return r;
     } catch (e) { uFail(e); }
   });

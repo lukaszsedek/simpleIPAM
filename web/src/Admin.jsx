@@ -125,8 +125,10 @@ function Unifi({ tenants, notify }) {
           <label class="toggle"><input type="checkbox" checked={c.auto_sync} onChange={(e) => patch({ auto_sync: e.target.checked })} /> {t('Synchronizuj automatycznie co godzinę')}</label>
           <div class="form-actions">
             <button class="btn ghost" disabled={!ready || !!busy} onClick={() => act('diag', api.unifiDiagnose, setDiag)} title={t('Tylko odczyt — sprawdza, czy klucz dosięga klasycznego API, gdzie UniFi trzyma aliasy klientów')}>{busy === 'diag' ? t('Sprawdzam…') : t('Sprawdź zapis do UniFi')}</button>
-            <button class="btn ghost" disabled={!ready || !!busy} onClick={() => act('pushdry', () => api.unifiPush(true), setPush)} title={t('Pokazuje, które aliasy zostałyby zmienione w UniFi — niczego nie zapisuje')}>{busy === 'pushdry' ? t('Liczę…') : t('Podgląd wysyłki aliasów')}</button>
-            <button class="btn ghost" disabled={!ready || !!busy} onClick={() => confirm(t('Zapisać aliasy z IPAM w kontrolerze UniFi? Zmieni to nazwy klientów w UniFi.')) && act('push', () => api.unifiPush(false), (r) => { setPush(r); api.unifi().then(setC); notify(r.ok ? t('Wysłano aliasów: {n}', { n: r.pushed }) : 'Wysyłka z błędami', r.ok ? 'ok' : 'error'); })}>{busy === 'push' ? t('Wysyłam…') : t('Wyślij aliasy do UniFi')}</button>
+            <button class="btn ghost" disabled={!ready || !!busy} onClick={() => act('pushdry', () => api.unifiPush(true), (r) => setPush({ ...r, kind: 'alias' }))} title={t('Pokazuje, które aliasy zostałyby zmienione w UniFi — niczego nie zapisuje')}>{busy === 'pushdry' ? t('Liczę…') : t('Podgląd wysyłki aliasów')}</button>
+            <button class="btn ghost" disabled={!ready || !!busy} onClick={() => confirm(t('Zapisać aliasy z IPAM w kontrolerze UniFi? Zmieni to nazwy klientów w UniFi.')) && act('push', () => api.unifiPush(false), (r) => { setPush({ ...r, kind: 'alias' }); api.unifi().then(setC); notify(r.ok ? t('Wysłano aliasów: {n}', { n: r.pushed }) : 'Wysyłka z błędami', r.ok ? 'ok' : 'error'); })}>{busy === 'push' ? t('Wysyłam…') : t('Wyślij aliasy do UniFi')}</button>
+            <button class="btn ghost" disabled={!ready || !!busy} onClick={() => act('resdry', () => api.unifiReserve(true), (r) => setPush({ ...r, kind: 'reserve' }))} title={t('Pokazuje, które rezerwacje DHCP (wpisy o statusie „Zarezerwowany” z MAC) zostałyby ustawione w UniFi — niczego nie zapisuje')}>{busy === 'resdry' ? t('Liczę…') : t('Podgląd rezerwacji DHCP')}</button>
+            <button class="btn ghost" disabled={!ready || !!busy} onClick={() => confirm(t('Ustawić w UniFi rezerwacje DHCP (stałe adresy) dla zarezerwowanych wpisów z IPAM?')) && act('res', () => api.unifiReserve(false), (r) => { setPush({ ...r, kind: 'reserve' }); api.unifi().then(setC); notify(r.ok ? t('Wysłano rezerwacji: {n}', { n: r.pushed }) : 'Wysyłka z błędami', r.ok ? 'ok' : 'error'); })}>{busy === 'res' ? t('Wysyłam…') : t('Wyślij rezerwacje DHCP do UniFi')}</button>
             <button class="btn ghost" disabled={!ready || !!busy} onClick={() => sync(true)}>{busy === 'dry' ? t('Liczę…') : t('Podgląd')}</button>
             <button class="btn primary" disabled={!ready || !!busy} onClick={() => sync(false)}>{busy === 'sync' ? t('Synchronizuję…') : t('Synchronizuj teraz')}</button>
           </div>
@@ -146,14 +148,14 @@ function Unifi({ tenants, notify }) {
       )}
       {push && (
         <div class={`last-run ${push.ok ? 'ok' : 'bad'}`}>
-          <div><b>{push.dry ? t('Podgląd wysyłki aliasów (nic nie zapisano)') : t('Wysyłka aliasów do UniFi')}</b> · {when(push.at)}{!push.dry && ` · ${t('wysłano {n}', { n: push.pushed })}`}</div>
+          <div><b>{push.kind === 'reserve' ? (push.dry ? t('Podgląd rezerwacji DHCP (nic nie zapisano)') : t('Wysyłka rezerwacji DHCP do UniFi')) : push.dry ? t('Podgląd wysyłki aliasów (nic nie zapisano)') : t('Wysyłka aliasów do UniFi')}</b> · {when(push.at)}{!push.dry && ` · ${t('wysłano {n}', { n: push.pushed })}`}</div>
           {push.results.map((r) => (
             <div class="small-text">
               <b>{r.site}</b>
               {r.planned.map((p) => <div class="diff-line"><span class="mono">{p.ip}</span> <s>{p.from || '∅'}</s> → <b>{p.to}</b></div>)}
               {r.skipped.map((p) => <div class="muted"><span class="mono">{p.ip}</span> {t('pominięto:')} {t(p.reason)}</div>)}
               {r.errors.map((e) => <div class="error-text">{t(e)}</div>)}
-              {!r.planned.length && !r.skipped.length && !r.errors.length && <div class="muted">{t('Wszystkie aliasy są już zgodne.')}</div>}
+              {!r.planned.length && !r.skipped.length && !r.errors.length && <div class="muted">{push.kind === 'reserve' ? t('Wszystkie rezerwacje są już zgodne.') : t('Wszystkie aliasy są już zgodne.')}</div>}
             </div>
           ))}
         </div>

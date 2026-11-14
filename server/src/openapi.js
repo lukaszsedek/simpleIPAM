@@ -20,6 +20,7 @@ const D = {
   'GET /api/networks/:id/next-free': ['Networks', 'First free address (skips the gateway, the DHCP range and existing entries)', 'reader', { query: { from: 'string (IP) — search from this address' }, returns: '{ ip: string|null }' }],
   'POST /api/networks/:id/scan': ['Networks', 'Ping-scan the network (up to /22) and read MACs from the ARP table (when the server is in the same L2 segment). Returns { alive: [{ ip, known, mac }], macs }', 'contributor'],
   'GET /api/networks/:id/issues': ['Networks', 'Consistency warnings: duplicates, clashes with DHCP, overlapping networks, expiring entries, growth forecast', 'reader'],
+  'POST /api/networks/:id/dns-check': ['Networks', 'Resolve the FQDN of every entry (A records) and compare with the entry IP. Returns { checked, problems, results: [{ ip, fqdn, resolved, result: ok|missing|mismatch }] }', 'reader'],
   'GET /api/networks/:id/discovered': ['Networks', 'Hosts found by a scan but not entered in the network', 'reader'],
   'POST /api/discovered/:id/dismiss': ['Networks', 'Dismiss a discovered host', 'contributor'],
   'GET /api/sites/:id/free-blocks': ['Networks', 'Free CIDR blocks in a location', 'reader', { query: { within: 'string* (parent CIDR)', prefix: 'integer* (requested prefix length)' } }],
@@ -80,6 +81,7 @@ const D = {
   'POST /api/admin/unifi/discover': ['UniFi', 'Fetch the list of consoles (hosts) from the Ubiquiti account', 'session'],
   'POST /api/admin/unifi/sync': ['UniFi', 'Sync UniFi → simpleIPAM (one-way, plus aliases). dry_run=true only shows what would happen', 'session', { body: { dry_run: 'boolean' } }],
   'POST /api/admin/unifi/diagnose': ['UniFi', 'Read-only: check which console APIs (Integration and classic) the key can reach — a precondition for writing aliases to UniFi', 'session'],
+  'POST /api/admin/unifi/reserve': ['UniFi', 'Send DHCP reservations to UniFi: entries with status reserved and a MAC become fixed IPs of the matching known client (classic API; the UniFi network is matched by CIDR, nothing is created). dry_run=true shows the plan', 'session', { body: { dry_run: 'boolean' } }],
   'POST /api/admin/unifi/push': ['UniFi', 'Send aliases from simpleIPAM to UniFi (classic API, by MAC; only clients UniFi already knows, nothing is created). dry_run=true shows the plan. After the first successful write automation can be enabled (push_aliases)', 'session', { body: { dry_run: 'boolean' } }],
   // --- meta ---
   'GET /api/openapi.json': ['Documentation', 'This API description in OpenAPI 3 format', 'public'],

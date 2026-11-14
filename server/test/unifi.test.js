@@ -23,8 +23,9 @@ function fakeUbiquiti() {
       const reply = (data) => ({ ok: true, status: 200, json: async () => ({ meta: { rc: 'ok' }, data }), text: async () => '' });
       if (u.pathname === `${cbase}/self/sites`) return reply([{ name: 'default', desc: 'Default' }]);
       if (u.pathname === `${cbase}/s/default/rest/user` && (init.method ?? 'GET') === 'GET') return reply(f.known);
+      if (u.pathname === `${cbase}/s/default/rest/networkconf`) return reply(f.networkconf ?? [{ _id: 'n1', ip_subnet: '192.168.1.1/24' }]);
       const m = u.pathname.match(/\/s\/default\/rest\/user\/(\w+)$/);
-      if (m && init.method === 'PUT') { const body = JSON.parse(init.body); f.puts.push({ id: m[1], ...body }); const k = f.known.find((x) => x._id === m[1]); if (k) k.name = body.name; return reply([{}]); }
+      if (m && init.method === 'PUT') { const body = JSON.parse(init.body); f.puts.push({ id: m[1], ...body }); const k = f.known.find((x) => x._id === m[1]); if (k && body.name !== undefined) k.name = body.name; if (k && body.use_fixedip) Object.assign(k, { use_fixedip: true, fixed_ip: body.fixed_ip, network_id: body.network_id }); return reply([{}]); }
     }
     const base = '/v1/connector/consoles/host1/proxy/network/integration/v1';
     if (u.pathname === `${base}/sites`) return page([{ id: 's1', name: 'Default', internalReference: 'default' }]);
@@ -307,4 +308,27 @@ test('network devices become entries (typed) and clients show which AP/switch th
   f.devicesDown = true;                                                                              // console without the endpoint
   const r = await call('POST', '/api/admin/unifi/sync');
   assert.equal(r.ok, true);
+});
+
+test('DHCP reservations: preview, write fixed IPs for reserved entries, skip unknown clients and networks', async () => {
+  const ctx = await setup(); const { call, f } = ctx;
+  await connect(ctx);
+  f.clients = [{ id: 'c1', name: 'nas', type: 'WIRED', ipAddress: '192.168.1.10', macAddress: 'aa:bb:cc:00:00:10' },
+    { id: 'c2', name: 'tv', type: 'WIRED', ipAddress: '192.168.1.11', macAddress: 'aa:bb:cc:00:00:11' }];
+  f.known = [{ _id: 'u1', mac: 'aa:bb:cc:00:00:10', name: 'nas' }, { _id: 'u2', mac: 'aa:bb:cc:00:00:11', name: 'tv', use_fixedip: true, fixed_ip: '192.168.1.11', network_id: 'n1' }];
+  await assert.rejects(call('POST', '/api/admin/unifi/reserve'), /synchronizację/);
+  await call('POST', '/api/admin/unifi/sync');
+  const net = (await call('GET', '/api/overview'))[0].sites[0].networks[0];
+  const es = (await call('GET', `/api/networks/${net.id}`)).entries;
+  for (const e of es.filter((x) => x.ip.endsWith('.10') || x.ip.endsWith('.11'))) await call('PUT', `/api/entries/${e.id}`, { ...e, status: 'reserved' });
+  const dry = await call('POST', '/api/admin/unifi/reserve', { dry_run: true });
+  assert.deepEqual(dry.results[0].planned.map((p) => [p.ip, p.from, p.to]), [['192.168.1.10', '', '192.168.1.10']]);   // tv already reserved
+  assert.equal(f.puts.length, 0);
+  const r = await call('POST', '/api/admin/unifi/reserve');
+  assert.deepEqual([r.pushed, f.puts.length], [1, 1]);
+  assert.deepEqual([f.puts[0].id, f.puts[0].use_fixedip, f.puts[0].fixed_ip, f.puts[0].network_id], ['u1', true, '192.168.1.10', 'n1']);
+  assert.equal((await call('POST', '/api/admin/unifi/reserve')).pushed, 0);                  // idempotent
+  f.networkconf = [{ _id: 'n9', ip_subnet: '10.9.9.1/24' }];                                 // UniFi has no such network
+  f.known[0].use_fixedip = false;
+  assert.match((await call('POST', '/api/admin/unifi/reserve', { dry_run: true })).results[0].skipped[0].reason, /sieci o tym CIDR/);
 });

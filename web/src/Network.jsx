@@ -92,9 +92,9 @@ function ScanModal({ net, onClose, onAdd }) {
   );
 }
 
-const FIELD_LABELS = { ip: 'IP', fqdn: 'FQDN', alias: 'Alias', mac: 'MAC', type: 'Typ', status: 'Status', tags: 'Tagi', description: 'Opis', expires_at: 'Ważny do' };
+const FIELD_LABELS = { ip: 'IP', fqdn: 'FQDN', alias: 'Alias', mac: 'MAC', type: 'Typ', status: 'Status', tags: 'Tagi', description: 'Opis', expires_at: 'Ważny do', reservation: 'Rezerwacja DHCP' };
 const show = (k, v) => (v === '' || v == null ? '∅' : k === 'type' ? TYPE_LABELS[v] ?? v : k === 'status' ? STATUS_LABELS[v] ?? v : v);
-const ACTIONS = { create: 'dodano', update: 'zmieniono', delete: 'usunięto', mac_seen: 'zauważył inny MAC', mac_ignored: 'zignorowano MAC', pushed: 'wysłano alias do UniFi' };
+const ACTIONS = { create: 'dodano', update: 'zmieniono', delete: 'usunięto', mac_seen: 'zauważył inny MAC', mac_ignored: 'zignorowano MAC', pushed: 'wysłano do UniFi' };
 
 // Change log of one entry (or, without `entry`, of the whole network).
 function HistoryModal({ net, entry, onClose }) {
@@ -132,6 +132,32 @@ const ago = (ts) => {
   if (m < 48 * 60) return t('{n} godz. temu', { n: Math.round(m / 60) });
   return t('{n} dni temu', { n: Math.round(m / 1440) });
 };
+
+// Resolves every FQDN of the network from the server and lists the entries whose DNS record is missing or points elsewhere.
+function DnsModal({ net, onClose }) {
+  const [state, setState] = useState({ loading: true });
+  useEffect(() => { api.dnsCheck(net.id).then(setState).catch((e) => setState({ error: e.message })); }, []);
+  const bad = state.results?.filter((r) => r.result !== 'ok') ?? [];
+  return (
+    <Modal title="Spójność DNS" onClose={onClose} wide>
+      {state.loading && <div class="scan"><div class="radar" /><p>{t('Sprawdzam DNS…')}</p></div>}
+      {state.error && <p class="error-text">{t(state.error)}</p>}
+      {state.results && (
+        <>
+          <p class="muted">{t('Sprawdzono nazw: {n}, rozbieżności: {p}', { n: state.checked, p: state.problems })}</p>
+          <ul class="scan-list">
+            {bad.map((r) => (
+              <li><span class="mono">{r.ip}</span><b>{r.fqdn}</b>
+                <span class={r.result === 'missing' ? 'muted small-text' : 'error-text small-text'}>
+                  {r.result === 'missing' ? t('brak rekordu A w DNS') : t('DNS wskazuje {ips}', { ips: r.resolved.join(', ') })}</span></li>
+            ))}
+            {!bad.length && <li class="muted">{state.checked ? t('Wszystkie nazwy wskazują na właściwe adresy') : t('Brak wpisów z FQDN do sprawdzenia')} 🎉</li>}
+          </ul>
+        </>
+      )}
+    </Modal>
+  );
+}
 
 function BulkBar({ count, onApply, onDelete, onClear }) {
   const [type, setType] = useState('');
@@ -195,6 +221,7 @@ export function Network({ id, notify, reload, onEditNet, onDeleteNet }) {
   const [status, setStatus] = useState('all');
   const [form, setForm] = useState(null);
   const [scan, setScan] = useState(false);
+  const [dns, setDns] = useState(false);
   const [hist, setHist] = useState(null);   // entry, or true for the whole network
   const [issues, setIssues] = useState([]);
   const [found, setFound] = useState([]);
@@ -332,6 +359,7 @@ export function Network({ id, notify, reload, onEditNet, onDeleteNet }) {
           <div class="spacer" />
           <button class="btn ghost" onClick={() => setHist(true)}><Icon name="history" />{t('Historia')}</button>
           {canEdit && <button class="btn ghost" onClick={() => setScan(true)}><Icon name="radar" />{t('Skanuj')}</button>}
+          <button class="btn ghost" onClick={() => setDns(true)} title={t('Porównuje FQDN wpisów z tym, co odpowiada DNS')}><Icon name="search" />DNS</button>
           <details class="menu">
             <summary class="btn ghost"><Icon name="download" />{t('Eksport')}</summary>
             <div class="menu-list">
@@ -400,6 +428,7 @@ export function Network({ id, notify, reload, onEditNet, onDeleteNet }) {
 
       {form && <EntryForm net={net} entry={form} notify={notify} onClose={() => setForm(null)} onSaved={() => { setForm(null); refresh(); }} />}
       {hist && <HistoryModal net={net} entry={hist === true ? null : hist} onClose={() => setHist(null)} />}
+      {dns && <DnsModal net={net} onClose={() => setDns(false)} />}
       {scan && <ScanModal net={net} onClose={() => setScan(false)} onAdd={(ip) => { setScan(false); setForm({ ip }); }} />}
     </div>
   );

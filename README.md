@@ -102,6 +102,10 @@ All endpoints are documented in the app: `/api/docs` (a readable page) and `/api
 
 Networks with "Scan automatically" enabled are pinged every `SCAN_INTERVAL_MIN` minutes (15 by default, `0` disables it). Hosts that answer get a "seen" timestamp, and unknown ones land on the "New devices" list. The container needs access to the scanned network (`network_mode: host`).
 
+## DNS consistency
+
+The **DNS** button on a network resolves the FQDN of every entry (from the server, so it honours its resolver and `/etc/hosts`) and lists names with no A record or pointing at another address.
+
 ## Entries that expire and the growth forecast
 
 An entry can have a **valid until** date (a guest, a lab machine). Expired entries and ones expiring within 14 days show up under "To review". The same list warns when a network is more than 90% full or, judging by the entries created in the last 60 days, will run out of free addresses within 180 days.
@@ -140,6 +144,7 @@ Administration → Settings → "UniFi (Site Manager)". One API key from unifi.u
 
 - **Import (UniFi → simpleIPAM).** Each console becomes a location in the chosen tenant, networks get the VLAN, gateway, DHCP range and DNS, network devices (gateways, switches, access points) and clients with fixed addresses become entries, and clients from the DHCP pool go to "new devices" (option: as entries too). Every client shows what it is attached to ("↳ AP Living room"). Existing data is not overwritten — only empty fields are filled in, and a MAC different from the stored one is reported as a warning.
 - **Aliases (two-way).** A client's name in UniFi goes to the entry's **Alias** field: an alias changed in UniFi is mirrored in IPAM unless it was changed in IPAM too (when both sides changed, IPAM wins). In the other direction "Send aliases to UniFi" (first "Preview alias push") renames clients in UniFi through the classic API, by MAC address; only clients UniFi already knows are touched, and a cleared alias never wipes the name in UniFi. After the first successful manual write you can enable automation: an alias saved in IPAM reaches UniFi right away, and every sync makes up for anything missed.
+- **DHCP reservations.** "Send DHCP reservations to UniFi" (first "Preview DHCP reservations") makes entries with status *Reserved* and a MAC into fixed IPs of the matching known client; the UniFi network is matched by CIDR.
 - **Checks.** "Check write access to UniFi" (read-only) shows whether the key reaches the classic API. "Preview" shows what would happen without writing; the sync can run every hour.
 
 ## Sign in with Google
