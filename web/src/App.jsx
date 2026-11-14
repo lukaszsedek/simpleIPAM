@@ -278,11 +278,13 @@ export function App() {
   };
 
   const netId = (/^#\/n\/(\d+)/.exec(hash) ?? [])[1];
+  // Locations start collapsed (just the list); the one holding the open network is shown expanded so you can see where you are.
+  const siteOpen = (s) => open[s.id] ?? s.networks.some((n) => String(n.id) === netId);
   const isAdmin = me?.global_role === 'admin';
   // legacy #/users and #/audit still work
   const adminTab = isAdmin ? (/^#\/admin(?:\/(\w+))?/.exec(hash)?.[1] ?? (hash === '#/users' ? 'users' : hash === '#/audit' ? 'audit' : hash.startsWith('#/admin') ? 'users' : null)) : null;
   const refreshMe = () => api.me().then((r) => setMe(r.user)).catch(() => {});   // e.g. the pending-users badge
-  const logout = async () => { await api.logout(); setMe(null); setTenants([]); setLoaded(false); go('#/'); };
+  const logout = async () => { await api.logout(); setOpen({}); setMe(null); setTenants([]); setLoaded(false); go('#/'); };
 
   const delTenant = async (t) => {
     if (!confirm(`Usunąć tenanta „${t.name}” razem z ${t.sites.length} lokalizacjami i wszystkimi danymi?`)) return;
@@ -323,12 +325,13 @@ export function App() {
               {open[`t${t.id}`] !== false && t.sites.map((s) => (
                 <div class="site">
                   <div class="site-head">
-                    <button class="site-btn" onClick={() => setOpen({ ...open, [s.id]: open[s.id] === false })}>
+                    <button class="site-btn" aria-expanded={siteOpen(s)} onClick={() => setOpen({ ...open, [s.id]: !siteOpen(s) })}>
                       <Icon name={s.icon} size={16} /><span>{s.name}</span><small>{s.networks.length}</small>
+                      <span class={`chev ${siteOpen(s) ? 'open' : ''}`}><Icon name="chevron" size={14} /></span>
                     </button>
                     {s.role === 'admin' && <button class="icon-btn" aria-label="Edytuj lokalizację" onClick={() => setModal({ kind: 'site', site: s })}><Icon name="edit" size={14} /></button>}
                   </div>
-                  {open[s.id] !== false && (
+                  {siteOpen(s) && (
                     <div class="nets">
                       {s.networks.map((n) => {
                         const pct = Math.round((n.stats.used / Math.max(1, n.stats.total)) * 100);

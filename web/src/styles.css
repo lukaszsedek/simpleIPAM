@@ -370,3 +370,8 @@ a.icon-btn { text-decoration: none; }
 .unifi-consoles { display: grid; gap: 10px; margin: 16px 0; padding-top: 12px; border-top: 1px solid var(--border); }
 .unifi-consoles h4 { margin: 0; font-size: 13px; color: var(--muted); font-weight: 600; }
 .card > p.muted + .form-grid, .card > p.muted + .field { margin-top: 12px; }
+
+/* collapsible locations in the sidebar */
+.site-btn .chev { display: grid; place-items: center; color: var(--muted); transition: transform .15s; }
+.site-btn .chev.open { transform: rotate(90deg); }
+.site-btn small { margin-left: auto; }
