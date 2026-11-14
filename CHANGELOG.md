@@ -5,6 +5,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+### Changed
+- New logo: the address map (gateway, used, reserved and free addresses) as an app icon — sidebar, login screen, SVG favicon, README and API docs page.
+
 ## [0.4.1] - 2026-11-14
 
 ### Changed

@@ -1,3 +1,5 @@
+<p align="center"><img src="web/public/logo.svg" alt="simpleIPAM" width="96" /></p>
+
 # simpleIPAM
 
 Lekki IPAM do użytku domowego. Hierarchia: **tenant** (rodzina, firma…) → **lokalizacja** (dom1, lab2, cloud-aws…) → **sieć** (CIDR, VLAN, brama, DHCP, DNS) → **wpisy** (IP, FQDN, MAC, typ, status, tagi).

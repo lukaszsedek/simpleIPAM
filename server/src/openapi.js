@@ -152,7 +152,7 @@ export function buildOpenApi(routes, { version = 'dev' } = {}) {
   };
 }
 
-export const DOCS_HTML = `<!doctype html><html lang="pl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>simpleIPAM API</title>
+export const DOCS_HTML = `<!doctype html><html lang="pl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>simpleIPAM API</title><link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <style>
 :root{--bg:#f6f7fb;--s:#fff;--b:#e3e6ef;--t:#161a2b;--m:#6b7189;--a:#6366f1}
 @media(prefers-color-scheme:dark){:root{--bg:#0d0f17;--s:#151824;--b:#262b3d;--t:#e8eaf4;--m:#8b91ab}}

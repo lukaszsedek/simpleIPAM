@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'preact/hooks';
 import { api } from './api.js';
-import { Icon, Field } from './ui.jsx';
+import { Icon, Field, Logo } from './ui.jsx';
 
 const GOOGLE_MSG = { denied: 'Odmówiono dostępu na ekranie Google', state: 'Sesja logowania wygasła — spróbuj ponownie', error: 'Nie udało się zalogować przez Google' };
 
@@ -33,7 +33,7 @@ export function AuthScreen({ onAuth, registrationOpen = true, version = '', setu
   return (
     <div class="auth">
       <form class="auth-card" onSubmit={submit}>
-        <div class="brand"><span class="logo"><Icon name="plus" size={16} /></span>simpleIPAM</div>
+        <div class="brand"><Logo size={28} />simpleIPAM</div>
         {setup && (
           <div class="setup-intro">
             <h1>Witaj w simpleIPAM</h1>

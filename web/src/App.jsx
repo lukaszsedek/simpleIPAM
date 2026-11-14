@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { api } from './api.js';
-import { Icon, Modal, Field, Toasts, SITE_ICONS, ROLE_LABELS } from './ui.jsx';
+import { Icon, Modal, Field, Logo, Toasts, SITE_ICONS, ROLE_LABELS } from './ui.jsx';
 import { Network } from './Network.jsx';
 import { Admin } from './Admin.jsx';
 import { AuthScreen } from './Auth.jsx';
@@ -303,7 +303,7 @@ export function App() {
   return (
     <div class="shell">
       <aside class={`sidebar ${nav ? 'open' : ''}`}>
-        <a class="brand" href="#/" aria-label="Strona główna"><span class="logo"><Icon name="plus" size={16} /></span>simpleIPAM</a>
+        <a class="brand" href="#/" aria-label="Strona główna"><Logo size={28} />simpleIPAM</a>
         <button class="search-trigger" onClick={() => setPalette(true)}>
           <Icon name="search" size={16} /><span>Szukaj…</span><kbd>⌘K</kbd>
         </button>

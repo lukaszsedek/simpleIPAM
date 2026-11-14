@@ -30,8 +30,7 @@ button { cursor: pointer; }
 .sidebar { position: sticky; top: 0; height: 100vh; display: flex; flex-direction: column; gap: 12px; padding: 18px 14px;
   background: var(--surface); border-right: 1px solid var(--border); overflow: hidden; }
 .brand { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 17px; letter-spacing: -.02em; padding: 0 6px; }
-.logo { display: grid; place-items: center; width: 28px; height: 28px; border-radius: 9px; color: #fff;
-  background: linear-gradient(135deg, #7b7bff, #4a3fe0); }
+.logo { flex: none; display: block; border-radius: 9px; }
 .search-trigger { display: flex; align-items: center; gap: 8px; padding: 9px 12px; border-radius: 10px; border: 1px solid var(--border);
   background: var(--surface-2); color: var(--muted); text-align: left; }
 .search-trigger span { flex: 1; }
