@@ -11,8 +11,8 @@ async function req(method, url, body) {
 }
 
 // Database files are uploaded as raw bytes (the JSON helper above is for everything else).
-async function upload(url, file) {
-  const res = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/octet-stream' }, body: file });
+async function upload(url, file, passphrase) {
+  const res = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/octet-stream', ...(passphrase ? { 'x-backup-passphrase': passphrase } : {}) }, body: file });
   const data = await res.json().catch(() => ({}));
   if (res.status === 401) window.dispatchEvent(new Event('ipam:unauth'));
   if (!res.ok) throw new Error(data.error || `Błąd ${res.status}`);
@@ -20,8 +20,8 @@ async function upload(url, file) {
 }
 
 export const api = {
-  inspectRestore: (name) => req('POST', '/api/admin/restore/inspect', { name }),
-  inspectUpload: (file) => upload('/api/admin/restore/inspect', file),
+  inspectRestore: (name, passphrase) => req('POST', '/api/admin/restore/inspect', { name, passphrase }),
+  inspectUpload: (file, passphrase) => upload('/api/admin/restore/inspect', file, passphrase),
   applyRestore: (token) => req('POST', '/api/admin/restore/apply', { token }),
   me: () => req('GET', '/api/me'),
   login: (username, password) => req('POST', '/api/auth/login', { username, password }),
@@ -56,9 +56,10 @@ export const api = {
   gdriveDeviceStart: () => req('POST', '/api/admin/backups/gdrive/device/start', {}),
   gdriveDevicePoll: () => req('POST', '/api/admin/backups/gdrive/device/poll', {}),
   gdriveFiles: () => req('GET', '/api/admin/backups/gdrive/files'),
-  inspectDrive: (id) => req('POST', '/api/admin/restore/inspect', { drive_id: id }),
+  inspectDrive: (id, passphrase) => req('POST', '/api/admin/restore/inspect', { drive_id: id, passphrase }),
   gdriveDisconnect: () => req('POST', '/api/admin/backups/gdrive/disconnect', {}),
   googleStart: (link) => req('POST', '/api/auth/google/start', { origin: location.origin, link }),
+  googleUnlink: () => req('POST', '/api/me/google/unlink', {}),
   googleLoginConfig: () => req('GET', '/api/admin/google-login'),
   saveGoogleLogin: (c) => req('PUT', '/api/admin/google-login', c),
   testRemote: () => req('POST', '/api/admin/backups/test-remote', {}),

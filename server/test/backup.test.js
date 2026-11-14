@@ -161,3 +161,33 @@ test('admin backup routes: permissions, list/download/delete, traversal, test-re
   const sys = await admin('GET', '/api/admin/system');
   assert.equal(sys.counts.users, 2);
 });
+
+test('encrypted backups: AES-GCM roundtrip, wrong passphrase, tamper, scheduled backups, restore staging', async () => {
+  const { encrypt, decrypt, isEncrypted } = await import('../src/backup-crypto.js');
+  const plain = Buffer.from('SQLite format 3\0 pretend database');
+  const blob = encrypt(plain, 'correct horse');
+  assert.equal(isEncrypted(blob), true);
+  assert.equal(blob.includes(Buffer.from('pretend database')), false);
+  assert.deepEqual(decrypt(blob, 'correct horse'), plain);
+  assert.throws(() => decrypt(blob, 'wrong pass'), /Nieprawidłowe hasło/);
+  const bad = Buffer.from(blob); bad[bad.length - 20] ^= 1;
+  assert.throws(() => decrypt(bad, 'correct horse'), /Nieprawidłowe hasło/);
+
+  const dir = join(mkdtempSync(join(tmpdir(), 'ipam-enc-')), 'b');
+  const db = openDb(':memory:');
+  assert.throws(() => saveConfig(db, { encrypt: { enabled: true } }), /Ustaw hasło/);
+  assert.throws(() => saveConfig(db, { encrypt: { enabled: true, passphrase: 'short' } }), /min. 8/);
+  const pub = publicConfig(saveConfig(db, { encrypt: { enabled: true, passphrase: 'correct horse' } }));
+  assert.deepEqual([pub.encrypt.enabled, pub.encrypt.passphrase_set, 'passphrase' in pub.encrypt], [true, true, false]);
+  const r = await runBackup(db, { dir, now: new Date('2026-05-01T10:00:00Z') });
+  assert.equal(r.name, 'ipam-20260501-100000.db.enc');
+  assert.deepEqual(readdirSync(dir), ['ipam-20260501-100000.db.enc']);
+  assert.equal(isBackupName(r.name), true);
+  const { readFileSync } = await import('node:fs');
+  const file = readFileSync(join(dir, r.name));
+  assert.equal(isEncrypted(file), true);
+  assert.equal(decrypt(file, 'correct horse').subarray(0, 15).toString(), 'SQLite format 3');
+  // a blank passphrase on later saves keeps the stored one
+  assert.equal(loadConfig(saveConfigDb(db)).encrypt.passphrase, 'correct horse');
+  function saveConfigDb(d) { saveConfig(d, { encrypt: { passphrase: '' } }); return d; }
+});

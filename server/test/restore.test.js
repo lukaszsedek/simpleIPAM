@@ -147,3 +147,19 @@ test('staged files left over from a previous run are removed on startup', async 
   createApi(openDb(join(dir, 'ipam.db')), {});
   assert.equal(existsSync(stray), false);
 });
+
+test('restore of an encrypted backup: stored passphrase works, an explicit one overrides, wrong one is refused', async () => {
+  const { admin } = await setup();
+  await seed(admin);
+  await admin('PUT', '/api/admin/backups/config', { encrypt: { enabled: true, passphrase: 'correct horse' } });
+  const bk = await admin('POST', '/api/admin/backups/run');
+  assert.match(bk.name, /\.db\.enc$/);
+  const p = await admin('POST', '/api/admin/restore/inspect', { name: bk.name });
+  assert.equal(p.backup.networks > 0, true);
+  // the passphrase later changes: old copies need the typed one
+  await admin('PUT', '/api/admin/backups/config', { encrypt: { passphrase: 'another phrase' } });
+  await assert.rejects(admin('POST', '/api/admin/restore/inspect', { name: bk.name }), /Nieprawidłowe hasło/);
+  assert.equal((await admin('POST', '/api/admin/restore/inspect', { name: bk.name, passphrase: 'correct horse' })).backup.networks > 0, true);
+  const { readFileSync } = await import('node:fs');
+  await assert.rejects(admin('POST', '/api/admin/restore/inspect', { file: Buffer.from('SIPAMENC1\n'.padEnd(80, 'x')) }), /Nieprawidłowe hasło/);
+});

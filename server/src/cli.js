@@ -5,8 +5,18 @@ import { openDb } from './db.js';
 import { createAuth } from './auth.js';
 
 const [cmd, username, given] = process.argv.slice(2);
+if (cmd === 'decrypt' && username && given) {     // node src/cli.js decrypt <in.db.enc> <out.db>   (passphrase in BACKUP_PASSPHRASE)
+  const { readFileSync, writeFileSync } = await import('node:fs');
+  const { decrypt, isEncrypted } = await import('./backup-crypto.js');
+  const buf = readFileSync(username);
+  if (!isEncrypted(buf)) { console.error('Plik nie jest zaszyfrowaną kopią simpleIPAM'); process.exit(1); }
+  if (!process.env.BACKUP_PASSPHRASE) { console.error('Ustaw zmienną BACKUP_PASSPHRASE'); process.exit(2); }
+  writeFileSync(given, decrypt(buf, process.env.BACKUP_PASSPHRASE));
+  console.log(`OK: zapisano ${given}`);
+  process.exit(0);
+}
 if (cmd !== 'reset-admin' || !username) {
-  console.error('Usage: node src/cli.js reset-admin <username> [new-password]');
+  console.error('Usage: node src/cli.js reset-admin <username> [new-password]\n       BACKUP_PASSPHRASE=… node src/cli.js decrypt <in.db.enc> <out.db>');
   process.exit(2);
 }
 const db = openDb(process.env.DB_PATH ?? '/data/ipam.db');

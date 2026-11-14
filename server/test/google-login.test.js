@@ -83,3 +83,23 @@ test('linking Google to an existing account; identity cannot be shared', async (
   const bob = browser(); await bob('POST', '/api/auth/register', { username: 'bob', password: 'password123' });
   assert.match((await (await google(bob, { link: true }))()).redirect, /msg%3A/);
 });
+
+test('unlinking Google: refused while the account has no password, allowed after one is set', async () => {
+  const { browser } = setup();
+  const admin = browser();
+  await admin('POST', '/api/auth/register', { username: 'admin', password: 'password123' });
+  await admin('PUT', '/api/admin/google-login', { client_id: 'cid', client_secret: 'sec', enabled: true });
+  const jan = browser();
+  await (await google(jan))();
+  assert.equal((await jan('GET', '/api/me')).user.has_password, false);
+  await assert.rejects(jan('POST', '/api/me/google/unlink'), /ustaw hasło/);
+  await jan('POST', '/api/me/password', { password: 'brand-new-pass' });      // no current password needed the first time
+  assert.equal((await jan('GET', '/api/me')).user.has_password, true);
+  await jan('POST', '/api/me/google/unlink');
+  assert.equal((await jan('GET', '/api/me')).user.google_email, null);
+  await assert.rejects(jan('POST', '/api/me/password', { current: 'wrong-one', password: 'another-pass1' }), /nieprawidłowe/);
+  // the identity is free again: signing in with Google now creates a fresh account
+  const again = browser();
+  await (await google(again))();
+  assert.equal((await again('GET', '/api/me')).user.username, 'jan.kowalski2');
+});

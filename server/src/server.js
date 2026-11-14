@@ -107,7 +107,7 @@ createServer(async (req, res) => {
       if (hasBody && !raw && !type.startsWith('application/json')) throw new HttpError(415, 'Wymagany Content-Type: application/json');
       const body = raw ? { file: await readRaw(req) } : hasBody ? await readBody(req) : {};
       const bearer = /^Bearer (\S+)$/i.exec(req.headers.authorization ?? '')?.[1];
-      const ctx = { token: parseCookies(req.headers.cookie).sid, bearer, ip: req.socket.remoteAddress };
+      const ctx = { token: parseCookies(req.headers.cookie).sid, bearer, passphrase: req.headers['x-backup-passphrase'], ip: req.socket.remoteAddress };
       const out = await api(req.method, url.pathname, Object.fromEntries(url.searchParams), body, ctx);
       const headers = {};
       if (ctx.newToken || ctx.clearToken) headers['set-cookie'] = sessionCookie(req, ctx.newToken);

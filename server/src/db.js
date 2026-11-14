@@ -165,6 +165,7 @@ function openRaw(path) {
     if (!db.prepare(`PRAGMA table_info(${table})`).all().some((c) => c.name === col)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${col} ${ddl}`);
   };
   addColumn('entries', 'last_seen', 'TEXT');
+  addColumn('users', 'has_password', 'INTEGER NOT NULL DEFAULT 1');   // 0 = created through Google, password never chosen
   addColumn('networks', 'auto_scan', 'INTEGER NOT NULL DEFAULT 0');
   if (!db.prepare('PRAGMA table_info(audit)').all().some((c) => c.name === 'actor')) {
     db.exec("ALTER TABLE audit ADD COLUMN actor TEXT NOT NULL DEFAULT ''");

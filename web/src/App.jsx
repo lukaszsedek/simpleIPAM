@@ -121,20 +121,22 @@ function PasswordForm({ onClose, notify, me, googleReady }) {
   const [f, setF] = useState({ current: '', password: '' });
   const submit = async (e) => {
     e.preventDefault();
-    try { await api.changePassword(f.current, f.password); notify('Hasło zostało zmienione'); onClose(); }
+    try { await api.changePassword(f.current, f.password); notify('Hasło zostało zmienione'); onClose(); if (!me.has_password) setTimeout(() => location.reload(), 600); }
     catch (err) { notify(err.message, 'error'); }
   };
   return (
-    <Modal title="Zmiana hasła" onClose={onClose}>
+    <Modal title={me.has_password ? 'Zmiana hasła' : 'Ustaw hasło'} onClose={onClose}>
       <form class="form-grid" onSubmit={submit}>
-        <Field label="Aktualne hasło" span><input type="password" autocomplete="current-password" value={f.current} onInput={(e) => setF({ ...f, current: e.target.value })} required /></Field>
+        {me.has_password && <Field label="Aktualne hasło" span><input type="password" autocomplete="current-password" value={f.current} onInput={(e) => setF({ ...f, current: e.target.value })} required /></Field>}
         <Field label="Nowe hasło" hint="min. 8 znaków" span><input type="password" autocomplete="new-password" minLength={8} value={f.password} onInput={(e) => setF({ ...f, password: e.target.value })} required /></Field>
         <footer><button type="button" class="btn ghost" onClick={onClose}>Anuluj</button><button class="btn primary">Zmień</button></footer>
       </form>
       {googleReady && (
         <div class="google-link">
           {me.google_email
-            ? <p class="muted small-text">Połączone konto Google: <b>{me.google_email}</b> — możesz się nim logować.</p>
+            ? <p class="muted small-text">Połączone konto Google: <b>{me.google_email}</b> — możesz się nim logować.{' '}
+                {me.has_password ? <button type="button" class="link-btn" onClick={() => api.googleUnlink().then(() => { notify('Konto Google odłączone'); onClose(); setTimeout(() => location.reload(), 600); }).catch((e) => notify(e.message, 'error'))}>Odłącz</button>
+                  : <span>Ustaw hasło powyżej, aby móc odłączyć Google.</span>}</p>
             : <button type="button" class="btn ghost block" onClick={() => api.googleStart(true).then((r) => { location.href = r.url; }).catch((e) => notify(e.message, 'error'))}>Połącz z kontem Google</button>}
         </div>
       )}

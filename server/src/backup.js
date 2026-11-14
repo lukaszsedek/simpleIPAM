@@ -6,6 +6,7 @@ import { putGcs, parseServiceAccount } from './gcs.js';
 import { putDrive } from './gdrive.js';
 import { HttpError } from './errors.js';
 import { backupName, isBackupName } from './backup-names.js';
+import { encrypt } from './backup-crypto.js';
 
 // ---------- snapshots ----------
 // VACUUM INTO writes a consistent snapshot of a live WAL database into a new file.
@@ -38,6 +39,7 @@ const DEFAULTS = {
   provider: 'none', remote_enabled: false, local_keep: 7,
   s3: { endpoint: '', region: '', bucket: '', prefix: '', access_key: '', secret_key: '' },
   gcs: { bucket: '', prefix: '', service_account_json: '' },
+  encrypt: { enabled: false, passphrase: '' },
   gdrive: { client_id: '', client_secret: '', folder_name: '', keep: 14, refresh_token: '', email: '' },
 };
 const getSetting = (db, key) => db.prepare('SELECT value FROM settings WHERE key=?').get(key)?.value;
@@ -47,7 +49,7 @@ const setSetting = (db, key, value) => db.prepare(
 export function loadConfig(db) {
   let saved = {};
   try { saved = JSON.parse(getSetting(db, 'backup_config') ?? '{}'); } catch { /* fall back to defaults */ }
-  return { ...DEFAULTS, ...saved, s3: { ...DEFAULTS.s3, ...saved.s3 }, gcs: { ...DEFAULTS.gcs, ...saved.gcs }, gdrive: { ...DEFAULTS.gdrive, ...saved.gdrive } };
+  return { ...DEFAULTS, ...saved, s3: { ...DEFAULTS.s3, ...saved.s3 }, gcs: { ...DEFAULTS.gcs, ...saved.gcs }, gdrive: { ...DEFAULTS.gdrive, ...saved.gdrive }, encrypt: { ...DEFAULTS.encrypt, ...saved.encrypt } };
 }
 
 // Secrets never leave the server: the UI only learns whether they are set.
@@ -57,9 +59,11 @@ export function publicConfig(cfg) {
   let email = '';
   try { email = JSON.parse(service_account_json).client_email ?? ''; } catch { /* unset */ }
   const { client_secret, refresh_token, ...gdrive } = cfg.gdrive;
+  const { passphrase, ...encryption } = cfg.encrypt;
   return {
     ...cfg, s3: { ...s3, secret_set: !!secret_key }, gcs: { ...gcs, secret_set: !!service_account_json, client_email: email },
     gdrive: { ...gdrive, secret_set: !!client_secret, connected: !!refresh_token },
+    encrypt: { ...encryption, passphrase_set: !!passphrase },
   };
 }
 
@@ -99,6 +103,14 @@ export function saveConfig(db, input) {
     try { parseServiceAccount(gcs.service_account_json); } catch (e) { throw bad(e.message); }
     cfg.gcs.service_account_json = gcs.service_account_json.trim();
   }
+  const enc = input.encrypt ?? {};
+  if (text(enc.passphrase, 200)) {
+    if (text(enc.passphrase, 200).length < 8) throw bad('Hasło szyfrowania: min. 8 znaków');
+    cfg.encrypt.passphrase = text(enc.passphrase, 200);       // blank = keep the stored passphrase
+  }
+  if (enc.enabled !== undefined) cfg.encrypt.enabled = !!enc.enabled;
+  if (cfg.encrypt.enabled && !cfg.encrypt.passphrase) throw bad('Ustaw hasło szyfrowania, zanim włączysz szyfrowanie kopii');
+
   const gd = input.gdrive ?? {};
   if (gd.client_id !== undefined) {
     const id = text(gd.client_id, 300);
@@ -147,9 +159,11 @@ export async function testRemote(cfg, deps = {}) {
 // Snapshot -> local file (if dir) -> remote (if enabled). Remote failure does not lose the local copy.
 export async function runBackup(db, { dir, trigger = 'manual', now = new Date(), ...deps } = {}) {
   const cfg = loadConfig(db);
-  const body = snapshotBuffer(db);
-  const name = backupName(now);
-  const result = { at: now.toISOString(), day: now.toISOString().slice(0, 10), trigger, name, size: body.length, ok: true, local: null, remote: null };
+  const sealed = cfg.encrypt.enabled && cfg.encrypt.passphrase;
+  const plain = snapshotBuffer(db);
+  const body = sealed ? encrypt(plain, cfg.encrypt.passphrase) : plain;
+  const name = backupName(now, !!sealed);
+  const result = { at: now.toISOString(), day: now.toISOString().slice(0, 10), trigger, name, size: body.length, encrypted: !!sealed, ok: true, local: null, remote: null };
   if (dir) {
     try {
       mkdirSync(dir, { recursive: true });

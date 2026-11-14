@@ -6,6 +6,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 ## [Unreleased]
 
 ### Added
+- Optional passphrase encryption (AES-256-GCM) of scheduled backups, local and remote (`.db.enc`); restore asks for the passphrase when needed; `cli.js decrypt` for offline use.
+- Unlink a Google account from a user (only once the account has a password); Google-created accounts can set a first password without a current one.
 - Sign in with Google (OpenID Connect + PKCE): enabled by an admin in Ustawienia, new Google users start with role None and respect closed registration; existing accounts can link a Google account.
 
 ## [0.2.0] - 2026-11-12

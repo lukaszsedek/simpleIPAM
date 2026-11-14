@@ -72,7 +72,7 @@ export function createAuth(db) {
     for (let i = 2; one('SELECT id FROM users WHERE username = ?', username); i++) username = `${base}${i}`;
     db.exec('BEGIN IMMEDIATE');
     try {
-      const id = Number(run('INSERT INTO users (username, password_hash) VALUES (?,?)', username, hashPassword(randomBytes(24).toString('hex'))).lastInsertRowid);
+      const id = Number(run('INSERT INTO users (username, password_hash, has_password) VALUES (?,?,0)', username, hashPassword(randomBytes(24).toString('hex'))).lastInsertRowid);
       run('INSERT INTO user_identities (provider, subject, user_id, email) VALUES (?,?,?,?)', provider, subject, id, email);
       db.exec('COMMIT');
       return { user: { id, username }, token: startSession(id), created: true };
@@ -82,6 +82,11 @@ export function createAuth(db) {
     const other = one('SELECT user_id FROM user_identities WHERE provider=? AND subject=?', provider, subject);
     if (other && other.user_id !== userId) throw new HttpError(409, 'To konto Google jest już połączone z innym użytkownikiem');
     run('INSERT INTO user_identities (provider, subject, user_id, email) VALUES (?,?,?,?) ON CONFLICT(provider, subject) DO UPDATE SET email=excluded.email', provider, subject, userId, email);
+  }
+  const hasPassword = (userId) => !!one('SELECT has_password FROM users WHERE id=?', userId)?.has_password;
+  function unlinkIdentity(userId, provider) {
+    if (!hasPassword(userId)) throw new HttpError(400, 'Najpierw ustaw hasło — bez niego po odłączeniu Google nie zalogujesz się na to konto');
+    run('DELETE FROM user_identities WHERE user_id=? AND provider=?', userId, provider);
   }
   const identityOf = (userId, provider) => one('SELECT email FROM user_identities WHERE user_id=? AND provider=?', userId, provider)?.email ?? null;
 
@@ -107,7 +112,7 @@ export function createAuth(db) {
 
   function setPassword(userId, password) {
     validateCredentials('valid.name', password);
-    run('UPDATE users SET password_hash = ? WHERE id = ?', hashPassword(password), userId);
+    run('UPDATE users SET password_hash = ?, has_password = 1 WHERE id = ?', hashPassword(password), userId);
   }
   const checkPassword = (userId, password) => verifyPassword(String(password ?? ''), one('SELECT password_hash FROM users WHERE id=?', userId).password_hash);
   // Personal API tokens: shown once at creation, stored as sha256. They carry the owner's roles.
@@ -144,5 +149,5 @@ export function createAuth(db) {
 
   const globalAdminCount = () => one("SELECT COUNT(*) AS n FROM role_assignments WHERE site_id IS NULL AND tenant_id IS NULL AND role='admin'").n;
 
-  return { register, login, loginWithIdentity, linkIdentity, identityOf, logout, sessionUser, setPassword, checkPassword, dropSessions, rolesOf, effective, effectiveTenant, globalAdminCount, createToken, listTokens, deleteToken, tokenUser };
+  return { register, login, loginWithIdentity, linkIdentity, unlinkIdentity, hasPassword, identityOf, logout, sessionUser, setPassword, checkPassword, dropSessions, rolesOf, effective, effectiveTenant, globalAdminCount, createToken, listTokens, deleteToken, tokenUser };
 }

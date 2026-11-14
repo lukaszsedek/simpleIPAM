@@ -60,6 +60,19 @@ function LastRun({ last }) {
   );
 }
 
+function PassphraseModal({ retry, busy, onSubmit, onClose }) {
+  const [p, setP] = useState('');
+  return (
+    <Modal title="Kopia jest zaszyfrowana" onClose={onClose}>
+      <form class="form-grid" onSubmit={(e) => { e.preventDefault(); onSubmit(p); }}>
+        <Field label="Hasło szyfrowania" span hint={retry ? 'Nieprawidłowe hasło — spróbuj ponownie' : 'To samo, którym zaszyfrowano kopię'}>
+          <input type="password" autofocus autocomplete="off" value={p} onInput={(e) => setP(e.target.value)} required /></Field>
+        <footer><button type="button" class="btn ghost" onClick={onClose}>Anuluj</button><button class="btn primary" disabled={busy}>Odszyfruj</button></footer>
+      </form>
+    </Modal>
+  );
+}
+
 export function Backups({ notify }) {
   const [data, setData] = useState(null);
   const [form, setForm] = useState(null);
@@ -95,7 +108,7 @@ export function Backups({ notify }) {
   }, [device]);
   // secret inputs start empty: a blank value on save means "keep the stored secret"
   const seed = (c) => ({ provider: c.provider, remote_enabled: c.remote_enabled, local_keep: c.local_keep,
-    s3: { ...c.s3, secret_key: '' }, gcs: { ...c.gcs, service_account_json: '' }, gdrive: { ...c.gdrive, client_secret: '' } });
+    s3: { ...c.s3, secret_key: '' }, gcs: { ...c.gcs, service_account_json: '' }, gdrive: { ...c.gdrive, client_secret: '' }, encrypt: { enabled: c.encrypt.enabled, passphrase: '' } });
 
   if (!data || !form) return <p class="muted">Ładowanie…</p>;
   const cfg = data.config;
@@ -118,8 +131,16 @@ export function Backups({ notify }) {
     return api.testRemote();
   }, (r) => notify(r.ok ? 'Połączenie działa — plik testowy został wysłany' : `Błąd połączenia: ${r.message}`, r.ok ? 'ok' : 'error'));
   const del = (name) => confirm(`Usunąć kopię ${name}?`) && act('del', () => api.delBackup(name), load);
-  const inspect = (fn) => act('inspect', fn, setPreview);
-  const pickFile = (e) => { const f = e.target.files[0]; e.target.value = ''; if (f) inspect(() => api.inspectUpload(f)); };
+  const [askPass, setAskPass] = useState(null);   // { fn(passphrase) } while the user is asked for an encryption passphrase
+  const inspect = async (fn, pass) => {
+    setBusy('inspect');
+    try { setPreview(await fn(pass)); setAskPass(null); }
+    catch (e) {
+      if (/zaszyfrowana|Nieprawidłowe hasło/.test(e.message)) setAskPass({ fn, retry: !!pass }); else notify(e.message, 'error');
+    }
+    setBusy('');
+  };
+  const pickFile = (e) => { const f = e.target.files[0]; e.target.value = ''; if (f) inspect((p) => api.inspectUpload(f, p)); };
   // Saves what is on screen first (Client ID/Secret), then starts the chosen sign-in flow.
   const connect = () => act('connect', async () => { setForm(seed(await api.saveBackupConfig(form))); return api.gdriveConnect(); }, (r) => { location.href = r.url; });
   const connectDevice = () => act('connect', async () => { setForm(seed(await api.saveBackupConfig(form))); return api.gdriveDeviceStart(); }, setDevice);
@@ -129,6 +150,7 @@ export function Backups({ notify }) {
 
   return (
     <div class="admin-grid">
+      {askPass && <PassphraseModal retry={askPass.retry} busy={busy === 'inspect'} onSubmit={(p) => inspect(askPass.fn, p)} onClose={() => setAskPass(null)} />}
       {preview && <RestoreModal preview={preview} notify={notify} onClose={() => setPreview(null)} />}
       <section class="card">
         <h3>Pobierz kopię</h3>
@@ -140,7 +162,7 @@ export function Backups({ notify }) {
         <div class="card-head">
           <h3>Kopie na serwerze i w chmurze</h3>
           <label class="btn ghost" title="Przywróć z pliku .db pobranego wcześniej lub z chmury">
-            <Icon name="upload" />Przywróć z pliku<input type="file" accept=".db,.sqlite,application/octet-stream" hidden onChange={pickFile} />
+            <Icon name="upload" />Przywróć z pliku<input type="file" accept=".db,.enc,.sqlite,application/octet-stream" hidden onChange={pickFile} />
           </label>
           <button class="btn primary" disabled={busy === 'run'} onClick={runNow}><Icon name="cloud2" />{busy === 'run' ? 'Wykonuję…' : 'Wykonaj kopię teraz'}</button>
         </div>
@@ -153,10 +175,10 @@ export function Backups({ notify }) {
               <tbody>
                 {data.files.map((f) => (
                   <tr>
-                    <td class="mono">{f.name}</td><td>{when(f.mtime)}</td><td>{bytes(f.size)}</td>
+                    <td class="mono">{f.name.endsWith('.enc') && <span title="zaszyfrowana">🔒 </span>}{f.name}</td><td>{when(f.mtime)}</td><td>{bytes(f.size)}</td>
                     <td class="row-actions always">
                       <a class="icon-btn" href={`/api/admin/backups/${encodeURIComponent(f.name)}`} aria-label={`Pobierz ${f.name}`} title="Pobierz"><Icon name="download" size={16} /></a>
-                      <button class="btn small ghost" onClick={() => inspect(() => api.inspectRestore(f.name))} aria-label={`Przywróć ${f.name}`}><Icon name="history" size={14} />Przywróć</button>
+                      <button class="btn small ghost" onClick={() => inspect((p) => api.inspectRestore(f.name, p))} aria-label={`Przywróć ${f.name}`}><Icon name="history" size={14} />Przywróć</button>
                       <button class="icon-btn danger" onClick={() => del(f.name)} aria-label={`Usuń ${f.name}`}><Icon name="trash" size={16} /></button>
                     </td>
                   </tr>
@@ -166,6 +188,15 @@ export function Backups({ notify }) {
             {!data.files.length && <div class="empty">Brak kopii lokalnych.</div>}
           </div>
         ) : <p class="muted">Kopie lokalne są wyłączone (pusty <span class="mono">BACKUP_DIR</span>). Zdalne kopie nadal działają.</p>}
+        <div class="encrypt-box">
+          <label class="toggle"><input type="checkbox" checked={form.encrypt.enabled} onChange={(e) => set(['encrypt', 'enabled'], e.target.checked)} />
+            Szyfruj kopie automatyczne hasłem (AES-256, pliki <span class="mono">.db.enc</span>)</label>
+          {form.encrypt.enabled && (
+            <Field label="Hasło szyfrowania" hint={cfg.encrypt.passphrase_set ? 'zapisane — wpisz nowe, by je zmienić (starsze kopie zachowają stare hasło)' : 'min. 8 znaków'}>
+              <input type="password" autocomplete="new-password" value={form.encrypt.passphrase} placeholder={cfg.encrypt.passphrase_set ? '(zapisane)' : ''} onInput={(e) => set(['encrypt', 'passphrase'], e.target.value)} /></Field>
+          )}
+          <p class="muted small-text">Obejmuje kopie lokalne i wysyłane do chmury. <b>Zapamiętaj hasło poza aplikacją</b> — po awarii serwera będzie jedynym sposobem odczytu kopii. Ręczne „Pobierz teraz” pozostaje niezaszyfrowane. Poza aplikacją: <span class="mono">BACKUP_PASSPHRASE=… node src/cli.js decrypt plik.db.enc plik.db</span>.</p>
+        </div>
         <div class="inline-field">
           <label>Przechowuj lokalnie ostatnie <input type="number" min="1" max="365" value={form.local_keep} onInput={(e) => set(['local_keep'], e.target.value)} /> kopii</label>
           <button class="btn small" disabled={busy === 'save'} onClick={save}>Zapisz</button>
@@ -186,7 +217,7 @@ export function Backups({ notify }) {
                   {drive.map((f) => (
                     <tr>
                       <td class="mono">{f.name}</td><td>{when(f.created)}</td><td>{bytes(f.size)}</td>
-                      <td class="row-actions always"><button class="btn small ghost" disabled={busy === 'inspect'} onClick={() => inspect(() => api.inspectDrive(f.id))}><Icon name="history" size={14} />Przywróć</button></td>
+                      <td class="row-actions always"><button class="btn small ghost" disabled={busy === 'inspect'} onClick={() => inspect((p) => api.inspectDrive(f.id, p))}><Icon name="history" size={14} />Przywróć</button></td>
                     </tr>
                   ))}
                 </tbody>

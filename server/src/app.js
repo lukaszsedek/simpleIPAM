@@ -6,6 +6,7 @@ import { createAuth, RANK, ROLES } from './auth.js';
 import { snapshotBuffer, backupName, listLocal, isBackupName, loadConfig, saveConfig, publicConfig, runBackup, runDailyIfDue, lastBackup, testRemote, setGdriveAuth } from './backup.js';
 import * as gd from './gdrive.js';
 import * as gl from './google-login.js';
+import { isEncrypted, decrypt } from './backup-crypto.js';
 import { readFileSync, rmSync, existsSync, writeFileSync, copyFileSync, mkdirSync, readdirSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import { summarize, validateAndPrepare } from './restore.js';
@@ -506,7 +507,7 @@ export function createApi(db, opts = {}) {
   route('GET', '/api/me', ({ user }) => {
     const me = user ? meOf(user) : null;
     if (me?.global_role === 'admin') me.pending_users = noRoleCount();
-    if (me) me.google_email = auth.identityOf(user.id, 'google');
+    if (me) { me.google_email = auth.identityOf(user.id, 'google'); me.has_password = auth.hasPassword(user.id); }
     return { user: me, setup_required: count('users') === 0, registration_open: registrationOpen(), google_login: googleLogin().ready, version: opts.version ?? 'dev' };
   }, { public: true });
   route('GET', '/api/health', () => ({ ok: true }), { public: true });
@@ -520,6 +521,12 @@ export function createApi(db, opts = {}) {
   };
   const glPublic = () => { const { client_secret, ready, ...c } = googleLogin(); return { ...c, secret_set: !!client_secret, ready }; };
   route('GET', '/api/admin/google-login', ({ user }) => (needGlobalAdmin(user), glPublic()));
+  route('POST', '/api/me/google/unlink', ({ user, ctx }) => {
+    sessionOnly(ctx);
+    auth.unlinkIdentity(user.id, 'google');
+    log('update', 'user', `${user.username}: odłączono konto Google`);
+    return { ok: true };
+  });
   route('PUT', '/api/admin/google-login', ({ body, user, ctx }) => {
     needGlobalAdmin(user); sessionOnly(ctx);
     const c = googleLogin();
@@ -737,6 +744,12 @@ export function createApi(db, opts = {}) {
       label = body.name;
     }
     try {
+      const bytes = readFileSync(path);
+      if (isEncrypted(bytes)) {      // typed passphrase first, then the one stored for scheduled backups
+        const pass = String(body.passphrase ?? ctx.passphrase ?? '') || loadConfig(db).encrypt.passphrase;
+        if (!pass) throw bad('Kopia jest zaszyfrowana — podaj hasło szyfrowania');
+        writeFileSync(path, decrypt(bytes, pass));
+      }
       const { summary, migrated } = validateAndPrepare(path);
       staged.set(token, { path, label, summary, migrated, expires: Date.now() + STAGE_TTL_MS });
       return { token, label, migrated, current: summarize(db), backup: summary, you_in_backup: summary.usernames.includes(user.username) };
@@ -809,7 +822,7 @@ export function createApi(db, opts = {}) {
   });
   route('POST', '/api/me/password', ({ body, user, ctx }) => {
     sessionOnly(ctx);
-    if (!auth.checkPassword(user.id, body.current)) throw new HttpError(403, 'Aktualne hasło jest nieprawidłowe');
+    if (auth.hasPassword(user.id) && !auth.checkPassword(user.id, body.current)) throw new HttpError(403, 'Aktualne hasło jest nieprawidłowe');
     auth.setPassword(user.id, body.password);
     auth.dropSessions(user.id);
     ctx.newToken = auth.login(user.username, body.password, ctx.ip).token;
