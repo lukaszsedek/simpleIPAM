@@ -5,6 +5,14 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+### Added
+- Theme has a third mode, "system" (follows the OS live); the profile menu cycles light → dark → system.
+- Accessibility: "skip to content" link, Tab stays inside open dialogs and focus returns to what opened them, table headers sort from the keyboard, reduced-motion is respected, slightly darker muted text in the light theme.
+
+### Fixed
+- The Administration → Settings page no longer scrolls sideways on a phone (long UniFi toggles now wrap).
+- The Backups and Settings tab labels were not translated.
+
 ## [0.8.0] - 2026-11-14
 
 ### Added

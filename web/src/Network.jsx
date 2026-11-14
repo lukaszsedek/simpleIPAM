@@ -282,7 +282,8 @@ export function Network({ id, notify, reload, onEditNet, onDeleteNet }) {
     catch (err) { notify(err.message, 'error'); }
   };
   const th = (key, label) => (
-    <th class="sortable" onClick={() => setSort({ key, dir: sort.key === key ? -sort.dir : 1 })} aria-sort={sort.key === key ? (sort.dir > 0 ? 'ascending' : 'descending') : 'none'}>
+    <th class="sortable" tabIndex={0} onClick={() => setSort({ key, dir: sort.key === key ? -sort.dir : 1 })}
+      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setSort({ key, dir: sort.key === key ? -sort.dir : 1 }); } }} aria-sort={sort.key === key ? (sort.dir > 0 ? 'ascending' : 'descending') : 'none'}>
       {t(label)}{sort.key === key && <span class="arrow">{sort.dir > 0 ? '▲' : '▼'}</span>}
     </th>
   );

@@ -1,5 +1,5 @@
 :root {
-  --bg: #f6f7fb; --surface: #ffffff; --surface-2: #f0f2f8; --border: #e3e6ef; --text: #161a2b; --muted: #6b7189;
+  --bg: #f6f7fb; --surface: #ffffff; --surface-2: #f0f2f8; --border: #e3e6ef; --text: #161a2b; --muted: #636a82;
   --accent: #5b5bf0; --accent-soft: #ececff; --ok: #12a26b; --warn: #e08a00; --danger: #e5484d;
   --c-used: #5b5bf0; --c-reserved: #e08a00; --c-dhcp: #9fd8c0; --c-gw: #12a26b; --c-free: #e7e9f2;
   --shadow: 0 1px 2px rgba(20,24,50,.05), 0 8px 24px rgba(20,24,50,.06);
@@ -411,3 +411,15 @@ a.icon-btn { text-decoration: none; }
 .lang-switch button, .menu-lang button { border: 0; background: transparent; color: inherit; font: inherit; font-size: 12px; font-weight: 600; padding: 4px 8px; border-radius: 6px; cursor: pointer; opacity: .7; }
 .lang-switch button.on, .menu-lang button.on { background: var(--accent, #6366f1); color: #fff; opacity: 1; }
 .menu-lang { display: flex; gap: 2px; padding: 6px 10px; }
+
+.skip-link { position: absolute; left: 8px; top: -48px; z-index: 100; background: var(--accent); color: #fff; padding: 8px 14px; border-radius: 8px; text-decoration: none; }
+.skip-link:focus { top: 8px; }
+main:focus { outline: none; }
+th.sortable { cursor: pointer; }
+.form-actions, .head-actions, .modal-actions { flex-wrap: wrap; }
+.btn { max-width: 100%; }
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; scroll-behavior: auto !important; } }
+
+.toggle { white-space: normal; align-items: flex-start; }
+.toggle input { margin-top: 3px; flex: none; }
+.unifi-consoles { min-width: 0; }

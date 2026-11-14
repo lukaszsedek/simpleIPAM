@@ -71,10 +71,18 @@ export const SITE_ICONS = ['home', 'building', 'lab', 'cloud', 'server'];
 export function Modal({ title, onClose, children, wide }) {
   const ref = useRef();
   useEffect(() => {
-    const onKey = (e) => e.key === 'Escape' && onClose();
+    const opener = document.activeElement;      // give focus back to whatever opened the dialog
+    const onKey = (e) => {
+      if (e.key === 'Escape') return onClose();
+      if (e.key !== 'Tab' || !ref.current) return;      // keep Tab inside the dialog
+      const f = [...ref.current.querySelectorAll('a[href],button:not([disabled]),input:not([disabled]):not([type=hidden]),select,textarea,[tabindex="0"]')].filter((x) => x.offsetParent !== null);
+      if (!f.length) return;
+      if (e.shiftKey && document.activeElement === f[0]) { e.preventDefault(); f.at(-1).focus(); }
+      else if (!e.shiftKey && document.activeElement === f.at(-1)) { e.preventDefault(); f[0].focus(); }
+    };
     window.addEventListener('keydown', onKey);
     ref.current?.querySelector('input,select,textarea')?.focus();
-    return () => window.removeEventListener('keydown', onKey);
+    return () => { window.removeEventListener('keydown', onKey); opener?.focus?.(); };
   }, []);
   return (
     <div class="overlay" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>

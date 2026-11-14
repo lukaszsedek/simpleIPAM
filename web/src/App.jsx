@@ -249,7 +249,7 @@ export function App() {
   }, [menu]);
   const [toasts, setToasts] = useState([]);
   const [rev, setRev] = useState(0);
-  const [theme, setTheme] = useState(() => { try { return localStorage.theme; } catch { return null; } });
+  const [theme, setTheme] = useState(() => { try { return localStorage.theme || 'system'; } catch { return 'system'; } });   // light | dark | system
   const tid = useRef(0);
 
   const notify = (text, kind = 'ok') => {
@@ -273,8 +273,12 @@ export function App() {
   }, []);
   useEffect(() => { if (me) reload(); }, [me?.id]);
   useEffect(() => {
-    const dark = theme ? theme === 'dark' : matchMedia('(prefers-color-scheme: dark)').matches;
-    document.documentElement.dataset.theme = dark ? 'dark' : 'light';
+    const mq = matchMedia('(prefers-color-scheme: dark)');
+    const apply = () => { document.documentElement.dataset.theme = (theme === 'system' ? mq.matches : theme === 'dark') ? 'dark' : 'light'; };
+    apply();
+    if (theme !== 'system') return undefined;
+    mq.addEventListener('change', apply);      // follow the OS while in "system" mode
+    return () => mq.removeEventListener('change', apply);
   }, [theme]);
   useEffect(() => {
     const f = (e) => { if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); setPalette(true); } };
@@ -284,7 +288,7 @@ export function App() {
   useEffect(() => setNav(false), [hash]);
 
   const toggleTheme = () => {
-    const next = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
+    const next = { light: 'dark', dark: 'system', system: 'light' }[theme];
     setTheme(next);
     try { localStorage.theme = next; } catch {}
   };
@@ -373,7 +377,8 @@ export function App() {
         </div>
       </aside>
 
-      <main>
+      <a class="skip-link" href="#content" onClick={(e) => { e.preventDefault(); document.getElementById('content')?.focus(); }}>{tx('Przejdź do treści')}</a>
+      <main id="content" tabIndex={-1}>
         <header class="topbar">
           {isAdmin && (
             <a class={`btn ghost small admin-link ${adminTab ? 'on' : ''}`} href="#/admin" title={tx('Administracja')}>
@@ -391,7 +396,7 @@ export function App() {
                 <div class="menu-head"><b>{me.username}</b><span class={`role-badge ${me.global_role}`}>{ROLE_LABELS[me.global_role]}</span></div>
                 <button role="menuitem" onClick={() => { setMenu(false); setModal({ kind: 'tokens' }); }}><Icon name="code" size={16} />{tx('Tokeny API')}</button>
                 <button role="menuitem" onClick={() => { setMenu(false); setModal({ kind: 'pw' }); }}><Icon name="key" size={16} />{me.has_password ? tx('Zmień hasło') : tx('Hasło i konto Google')}</button>
-                <button role="menuitem" onClick={toggleTheme}><Icon name={document.documentElement.dataset.theme === 'dark' ? 'sun' : 'moon'} size={16} />{tx('Zmień motyw')}</button>
+                <button role="menuitem" onClick={toggleTheme}><Icon name={theme === 'dark' ? 'moon' : theme === 'light' ? 'sun' : 'settings'} size={16} />{tx('Motyw')}: {tx({ light: 'jasny', dark: 'ciemny', system: 'systemowy' }[theme])}</button>
                 <div class="menu-lang" role="group" aria-label={tx('Język')}>
                   {Object.entries(LANGS).map(([k, l]) => <button type="button" class={getLang() === k ? 'on' : ''} onClick={() => setLang(k)}>{k.toUpperCase()}<span class="sr-only"> {l}</span></button>)}
                 </div>
