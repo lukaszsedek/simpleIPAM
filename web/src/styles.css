@@ -405,3 +405,9 @@ a.icon-btn { text-decoration: none; }
 }
 .profile-btn > svg { transform: rotate(90deg); }
 .uplink { margin-top: 2px; white-space: nowrap; }
+
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.lang-switch { position: absolute; top: 16px; right: 16px; display: flex; gap: 2px; padding: 2px; border: 1px solid var(--border, #ddd); border-radius: 8px; background: var(--card, transparent); }
+.lang-switch button, .menu-lang button { border: 0; background: transparent; color: inherit; font: inherit; font-size: 12px; font-weight: 600; padding: 4px 8px; border-radius: 6px; cursor: pointer; opacity: .7; }
+.lang-switch button.on, .menu-lang button.on { background: var(--accent, #6366f1); color: #fff; opacity: 1; }
+.menu-lang { display: flex; gap: 2px; padding: 6px 10px; }

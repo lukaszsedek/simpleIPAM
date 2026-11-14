@@ -5,6 +5,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+### Added
+- The interface is available in **Polish, English and German**. The language follows the browser by default and can be switched in the profile menu or on the sign-in screen; messages from the server (errors, "To review") are translated too.
+
+### Changed
+- README and the OpenAPI/`/api/docs` documentation are now in English.
+
 ## [0.6.1] - 2026-11-14
 
 ### Added

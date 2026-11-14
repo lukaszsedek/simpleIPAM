@@ -1,4 +1,8 @@
 import { useEffect, useRef } from 'preact/hooks';
+import { t } from './i18n.js';
+
+// Label tables hold Polish source text; reading them translates on the fly, so a language switch needs no rebuild.
+const tmap = (o) => new Proxy(o, { get: (target, k) => (typeof target[k] === 'string' ? t(target[k]) : target[k]) });
 
 const PATHS = {
   home: 'M3 11l9-8 9 8M5 10v10h5v-6h4v6h5V10',
@@ -74,10 +78,10 @@ export function Modal({ title, onClose, children, wide }) {
   }, []);
   return (
     <div class="overlay" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <div class={`modal ${wide ? 'wide' : ''}`} ref={ref} role="dialog" aria-modal="true" aria-label={title}>
+      <div class={`modal ${wide ? 'wide' : ''}`} ref={ref} role="dialog" aria-modal="true" aria-label={t(title)}>
         <header>
-          <h2>{title}</h2>
-          <button class="icon-btn" onClick={onClose} aria-label="Zamknij"><Icon name="x" /></button>
+          <h2>{t(title)}</h2>
+          <button class="icon-btn" onClick={onClose} aria-label={t('Zamknij')}><Icon name="x" /></button>
         </header>
         {children}
       </div>
@@ -87,24 +91,24 @@ export function Modal({ title, onClose, children, wide }) {
 
 export const Field = ({ label, hint, children, span }) => (
   <label class={`field ${span ? 'span' : ''}`}>
-    <span>{label}</span>
+    <span>{t(label)}</span>
     {children}
-    {hint && <small>{hint}</small>}
+    {hint && <small>{t(hint)}</small>}
   </label>
 );
 
 export function Toasts({ items }) {
   return (
     <div class="toasts" aria-live="polite">
-      {items.map((t) => <div key={t.id} class={`toast ${t.kind}`}>{t.text}</div>)}
+      {items.map((i) => <div key={i.id} class={`toast ${i.kind}`}>{t(i.text)}</div>)}
     </div>
   );
 }
 
-export const TYPE_LABELS = {
+export const TYPE_LABELS = tmap({
   server: 'Serwer', vm: 'VM', container: 'Kontener', router: 'Router', switch: 'Switch', ap: 'Access Point',
   iot: 'IoT', printer: 'Drukarka', pc: 'Komputer', phone: 'Telefon', nas: 'NAS', other: 'Inne',
-};
+});
 export const ROLE_LABELS = { admin: 'Admin', contributor: 'Contributor', reader: 'Reader', none: 'None' };
 export const RANK = { none: 0, reader: 1, contributor: 2, admin: 3 };
-export const STATUS_LABELS = { used: 'Zajęty', reserved: 'Zarezerwowany', free: 'Wolny' };
+export const STATUS_LABELS = tmap({ used: 'Zajęty', reserved: 'Zarezerwowany', free: 'Wolny' });

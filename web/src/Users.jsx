@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'preact/hooks';
 import { api } from './api.js';
 import { Icon, Modal, Field, ROLE_LABELS } from './ui.jsx';
+import { t } from './i18n.js';
 
 const RoleSelect = ({ value, onChange, allowNone = true, ...rest }) => (
   <select class={`role-select ${value}`} value={value} onChange={(e) => onChange(e.target.value)} {...rest}>
@@ -20,7 +21,7 @@ function PasswordModal({ target, onClose, notify }) {
       <form class="form-grid" onSubmit={submit}>
         <Field label="Nowe hasło" hint="min. 8 znaków; użytkownik zostanie wylogowany" span>
           <input type="password" autocomplete="new-password" value={pw} onInput={(e) => setPw(e.target.value)} required minLength={8} /></Field>
-        <footer><button type="button" class="btn ghost" onClick={onClose}>Anuluj</button><button class="btn primary">Zmień</button></footer>
+        <footer><button type="button" class="btn ghost" onClick={onClose}>{t('Anuluj')}</button><button class="btn primary">{t('Zmień')}</button></footer>
       </form>
     </Modal>
   );
@@ -46,11 +47,11 @@ export function Users({ tenants, me, notify, onChanged }) {
 
   return (
     <div class="admin-section">
-      <p class="muted">Obowiązuje najbardziej szczegółowa rola: lokalizacja → tenant → globalna. „None” na niższym poziomie odbiera dostęp mimo roli wyżej.</p>
+      <p class="muted">{t('Obowiązuje najbardziej szczegółowa rola: lokalizacja → tenant → globalna. „None” na niższym poziomie odbiera dostęp mimo roli wyżej.')}</p>
       <section class="card table-card">
         <div class="table-wrap">
           <table>
-            <thead><tr><th>Użytkownik</th><th>Rola globalna</th><th>Role w tenantach i lokalizacjach</th><th /></tr></thead>
+            <thead><tr><th>{t('Użytkownik')}</th><th>{t('Rola globalna')}</th><th>{t('Role w tenantach i lokalizacjach')}</th><th /></tr></thead>
             <tbody>
               {users.map((u) => {
                 const d = add[u.id] ?? { scope: '', role: 'reader' };
@@ -62,14 +63,14 @@ export function Users({ tenants, me, notify, onChanged }) {
                 const chip = (kind, id, role) => (
                   <span class={`chip role ${role}`}>{label(kind, id)}
                     <RoleSelect value={role} onChange={(r) => act(() => api.setRole(u.id, scopeArg(kind, id), r))} />
-                    <button class="chip-x" aria-label="Usuń przypisanie" onClick={() => act(() => api.resetRole(u.id, kind, id))}><Icon name="x" size={12} /></button>
+                    <button class="chip-x" aria-label={t('Usuń przypisanie')} onClick={() => act(() => api.resetRole(u.id, kind, id))}><Icon name="x" size={12} /></button>
                   </span>
                 );
                 return (
                   <tr key={u.id}>
-                    <td><b>{u.username}</b>{u.id === me.id && <span class="chip accent" style="margin-left:8px">to Ty</span>}
-                      {u.no_roles && <span class="chip warn" style="margin-left:8px" title="Nowe konto bez żadnej roli — nie widzi żadnych danych">brak uprawnień</span>}
-                      <div class="muted small-text">od {u.created_at.slice(0, 10)}</div></td>
+                    <td><b>{u.username}</b>{u.id === me.id && <span class="chip accent" style="margin-left:8px">{t('to Ty')}</span>}
+                      {u.no_roles && <span class="chip warn" style="margin-left:8px" title={t('Nowe konto bez żadnej roli — nie widzi żadnych danych')}>{t('brak uprawnień')}</span>}
+                      <div class="muted small-text">{t('od {d}', { d: u.created_at.slice(0, 10) })}</div></td>
                     <td><RoleSelect value={u.global_role} onChange={(r) => act(() => api.setRole(u.id, {}, r), 'Zapisano rolę')} /></td>
                     <td>
                       <div class="role-chips">
@@ -78,7 +79,7 @@ export function Users({ tenants, me, notify, onChanged }) {
                         {options.length > 0 && (
                           <span class="add-role">
                             <select value={d.scope} onChange={(e) => setAdd({ ...add, [u.id]: { ...d, scope: e.target.value } })}>
-                              <option value="">+ tenant / lokalizacja…</option>
+                              <option value="">{t('+ tenant / lokalizacja…')}</option>
                               {options.map(([v, l]) => <option value={v}>{l}</option>)}
                             </select>
                             {d.scope && <>
@@ -87,16 +88,16 @@ export function Users({ tenants, me, notify, onChanged }) {
                                 const [kind, id] = d.scope.split(':');
                                 act(() => api.setRole(u.id, scopeArg(kind, id), d.role), 'Zapisano rolę');
                                 setAdd({ ...add, [u.id]: undefined });
-                              }}>Dodaj</button>
+                              }}>{t('Dodaj')}</button>
                             </>}
                           </span>
                         )}
                       </div>
                     </td>
                     <td class="row-actions always">
-                      <button class="icon-btn" title="Zmień hasło" aria-label="Zmień hasło" onClick={() => setPwFor(u)}><Icon name="key" size={16} /></button>
-                      {u.id !== me.id && <button class="icon-btn danger" aria-label="Usuń użytkownika"
-                        onClick={() => confirm(`Usunąć użytkownika ${u.username}?`) && act(() => api.delUser(u.id), 'Usunięto użytkownika')}><Icon name="trash" size={16} /></button>}
+                      <button class="icon-btn" title={t('Zmień hasło')} aria-label={t('Zmień hasło')} onClick={() => setPwFor(u)}><Icon name="key" size={16} /></button>
+                      {u.id !== me.id && <button class="icon-btn danger" aria-label={t('Usuń użytkownika')}
+                        onClick={() => confirm(t('Usunąć użytkownika {name}?', { name: u.username })) && act(() => api.delUser(u.id), 'Usunięto użytkownika')}><Icon name="trash" size={16} /></button>}
                     </td>
                   </tr>
                 );

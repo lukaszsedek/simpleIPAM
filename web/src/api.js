@@ -1,12 +1,17 @@
+import { t, getLang } from './i18n.js';
+
+// Server messages are Polish; they are translated here, and the original text stays in `err.raw` for code that matches on it.
+const fail = (data, status) => Object.assign(new Error(t(data.error || `Błąd ${status}`)), { raw: data.error || '' });
+
 async function req(method, url, body) {
   const res = await fetch(url, {
     method,
-    headers: body ? { 'content-type': 'application/json' } : undefined,
+    headers: { 'accept-language': getLang(), ...(body ? { 'content-type': 'application/json' } : {}) },
     body: body ? JSON.stringify(body) : undefined,
   });
   const data = await res.json().catch(() => ({}));
   if (res.status === 401 && !url.startsWith('/api/auth/') && url !== '/api/me') window.dispatchEvent(new Event('ipam:unauth'));
-  if (!res.ok) throw new Error(data.error || `Błąd ${res.status}`);
+  if (!res.ok) throw fail(data, res.status);
   return data;
 }
 
@@ -15,7 +20,7 @@ async function upload(url, file, passphrase) {
   const res = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/octet-stream', ...(passphrase ? { 'x-backup-passphrase': passphrase } : {}) }, body: file });
   const data = await res.json().catch(() => ({}));
   if (res.status === 401) window.dispatchEvent(new Event('ipam:unauth'));
-  if (!res.ok) throw new Error(data.error || `Błąd ${res.status}`);
+  if (!res.ok) throw fail(data, res.status);
   return data;
 }
 
