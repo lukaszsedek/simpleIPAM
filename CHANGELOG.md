@@ -5,13 +5,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
-### Added
-- Change history per entry and per network (who changed what, old → new), including CSV import and bulk edits; survives deleting the entry.
-- MAC change detection: scans read the ARP table; a known IP answering with a different MAC raises a warning (accept / ignore), entries without a MAC get a suggestion. Needs the container to share the LAN segment (`network_mode: host`).
-
 ## [0.3.0] - 2026-11-14
 
 ### Added
+- Change history per entry and per network (who changed what, old → new), including CSV import and bulk edits; survives deleting the entry.
+- MAC change detection: scans read the ARP table; a known IP answering with a different MAC raises a warning (accept / ignore), entries without a MAC get a suggestion. Needs the container to share the LAN segment (`network_mode: host`).
 - OpenAPI 3 description of the whole API (`/api/openapi.json`) and a readable docs page (`/api/docs`); a test fails when a route is added without documentation.
 - Optional passphrase encryption (AES-256-GCM) of scheduled backups, local and remote (`.db.enc`); restore asks for the passphrase when needed; `cli.js decrypt` for offline use.
 - Unlink a Google account from a user (only once the account has a password); Google-created accounts can set a first password without a current one.
