@@ -5,6 +5,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-11-14
+
 ### Added
 - **Address planning** per tenant (sidebar "Address planning" / `#/plan/<tenant>`): define address pools (e.g. `10.0.0.0/8`), see how much is allocated and which aligned blocks are still free, and allocate the next free subnet to a location in one step (creates the network with the first usable address as gateway). Conflicts (networks overlapping across locations, networks straddling a pool border) are listed.
 - **VLAN registry** per tenant (whole tenant or one location) with the networks using each VLAN, a list of VLAN numbers used but not defined, and a hint in "To review" when a network uses an undefined VLAN or two networks of a location share a VLAN.
