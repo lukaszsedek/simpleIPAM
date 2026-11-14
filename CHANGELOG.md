@@ -5,6 +5,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+### Added
+- **Azure integration** (Administration → Integrations): sign in as a service principal (directory ID, client ID, client secret; Reader role is enough) and import read-only. Every selected subscription becomes a location, every VNet subnet a network (the `.1` address as gateway), and network interfaces (VMs, private endpoints) and internal load balancer frontends become entries. Preview, "Check access" probe, optional hourly sync. The secret is write-only.
+
 ## [0.11.0] - 2026-11-14
 
 ### Added

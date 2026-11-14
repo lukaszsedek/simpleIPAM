@@ -200,6 +200,7 @@ function openRaw(path) {
   addColumn('sites', 'unifi_host', "TEXT NOT NULL DEFAULT ''");   // UniFi console / Integration-API site this site was imported from
   addColumn('sites', 'unifi_site', "TEXT NOT NULL DEFAULT ''");
   addColumn('sites', 'unifi_site_name', "TEXT NOT NULL DEFAULT ''");
+  addColumn('sites', 'azure_sub', "TEXT NOT NULL DEFAULT ''");      // Azure subscription this site was imported from
   addColumn('entries', 'uplink', "TEXT NOT NULL DEFAULT ''");       // where UniFi says the client is attached (AP / switch name)
   addColumn('entries', 'expires_at', "TEXT NOT NULL DEFAULT ''");   // YYYY-MM-DD; a temporary entry (guest, lab) to review after this date
   addColumn('entries', 'alias', "TEXT NOT NULL DEFAULT ''");        // friendly device name (mirrors the UniFi client alias)

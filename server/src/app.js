@@ -12,6 +12,7 @@ import { readNeighbors } from './neighbors.js';
 import { buildXlsx } from './xlsx.js';
 import { lookup } from 'node:dns/promises';
 import * as unifi from './unifi.js';
+import * as azure from './azure.js';
 import { readFileSync, rmSync, existsSync, writeFileSync, copyFileSync, mkdirSync, readdirSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import { summarize, validateAndPrepare } from './restore.js';
@@ -1580,8 +1581,180 @@ export function createApi(db, opts = {}) {
     return unifiSync().catch((e) => { console.error('UniFi sync failed:', e.message); return null; });
   };
 
+  // ---------- Azure (VNets and their devices) import ----------
+  // One-way: Azure -> simpleIPAM, authenticated as a service principal with the Reader role. Every selected subscription becomes a
+  // location, every VNet subnet a network, and network interfaces (VMs, private endpoints) and internal load balancer frontends become entries.
+  const AZURE_DEFAULTS = { directory_id: '', client_id: '', client_secret: '', tenant_id: null, subscriptions: [], auto_sync: false };
+  const azureCfg = () => {
+    let c = {};
+    try { c = JSON.parse(one("SELECT value FROM settings WHERE key='azure'")?.value ?? '{}'); } catch { /* unset */ }
+    return { ...AZURE_DEFAULTS, ...c };
+  };
+  const azureLast = () => { try { return JSON.parse(one("SELECT value FROM settings WHERE key='azure_last'")?.value ?? 'null'); } catch { return null; } };
+  const azurePublic = (c = azureCfg()) => ({ ...c, client_secret: undefined, secret_set: !!c.client_secret, last: azureLast() });
+  const azFail = (e) => { if (e instanceof azure.AzureError) throw bad(e.message); throw e; };
+  const azClient = (c) => azure.client(c, { fetch: opts.fetch });
+  const azReady = (c) => { if (!c.directory_id || !c.client_id || !c.client_secret) throw bad('Najpierw zapisz dane SPN (tenant, client ID, secret)'); };
+
+  route('GET', '/api/admin/azure', ({ user }) => (needGlobalAdmin(user), azurePublic()));
+  route('PUT', '/api/admin/azure', ({ body, user, ctx }) => {
+    needGlobalAdmin(user); sessionOnly(ctx);
+    const c = azureCfg();
+    const guid = (v, what) => {
+      const x = str(v, 40);
+      if (x && !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(x)) throw bad(`${what} musi być identyfikatorem GUID`);
+      return x;
+    };
+    const dir = guid(body.directory_id, 'Directory (tenant) ID'), cid = guid(body.client_id, 'Client (application) ID');
+    if ((dir && dir !== c.directory_id) || (cid && cid !== c.client_id)) c.subscriptions = [];       // another identity: rediscover
+    if (dir) c.directory_id = dir;
+    if (cid) c.client_id = cid;
+    if (str(body.client_secret, 300)) c.client_secret = str(body.client_secret, 300);
+    if (body.tenant_id !== undefined) {
+      if (body.tenant_id !== null) must(one('SELECT id FROM tenants WHERE id=?', body.tenant_id), 'Tenant');
+      c.tenant_id = body.tenant_id === null ? null : Number(body.tenant_id);
+    }
+    if (body.auto_sync !== undefined) c.auto_sync = !!body.auto_sync;
+    if (Array.isArray(body.subscriptions)) {
+      const on = new Set(body.subscriptions.filter((x) => x.enabled).map((x) => String(x.id)));
+      c.subscriptions = c.subscriptions.map((x) => ({ ...x, enabled: on.has(x.id) }));
+    }
+    saveSetting('azure', c);
+    log('update', 'settings', 'integracja Azure');
+    return azurePublic(c);
+  });
+  // Signs in and lists the subscriptions the service principal can read; doubles as the credentials test.
+  route('POST', '/api/admin/azure/discover', async ({ user, ctx }) => {
+    needGlobalAdmin(user); sessionOnly(ctx);
+    const c = azureCfg(); azReady(c);
+    try {
+      const subs = await azure.listSubscriptions(azClient(c));
+      const was = new Map(c.subscriptions.map((x) => [x.id, x]));
+      c.subscriptions = subs.map((s) => ({ id: s.id, name: s.name, enabled: was.get(s.id)?.enabled ?? false }));
+      saveSetting('azure', c);
+      return azurePublic(c);
+    } catch (e) { azFail(e); }
+  });
+  // Read-only probe per selected subscription: how many of each resource the SPN can see, or why not.
+  route('POST', '/api/admin/azure/diagnose', async ({ user, ctx }) => {
+    needGlobalAdmin(user); sessionOnly(ctx);
+    const c = azureCfg(); azReady(c);
+    const subs = c.subscriptions.filter((x) => x.enabled);
+    if (!subs.length) throw bad('Zaznacz co najmniej jedną subskrypcję');
+    const cl = azClient(c), results = [];
+    for (const s of subs) {
+      const row = { subscription: s.name };
+      for (const [k, fn] of [['vnets', azure.listVnets], ['interfaces', azure.listNics], ['load_balancers', azure.listLoadBalancers]]) {
+        try { row[k] = (await fn(cl, s.id)).length; } catch (e) { row[k] = null; (row.errors ??= []).push(`${k}: ${e.message}`); }
+      }
+      results.push(row);
+    }
+    return { results };
+  });
+
+  async function azureFetchSub(cl, sub) {
+    const [vnets, nics, lbs] = await Promise.all([azure.listVnets(cl, sub.id), azure.listNics(cl, sub.id), azure.listLoadBalancers(cl, sub.id).catch(() => [])]);
+    return { vnets, items: [...nics.flatMap(azure.toInterfaces), ...lbs.flatMap(azure.toFrontends)] };
+  }
+  function azureApply(c, sub, f, dry) {
+    const who = 'azure';
+    const sum = { console: sub.name, sites: 1, networks: { created: 0, updated: 0, skipped: 0 }, entries: { created: 0, updated: 0, pooled: 0, skipped: 0 }, errors: [] };
+    const siteName = sub.name.slice(0, 80);
+    let site = one('SELECT * FROM sites WHERE tenant_id=? AND azure_sub=?', c.tenant_id, sub.id) ?? one('SELECT * FROM sites WHERE tenant_id=? AND name=?', c.tenant_id, siteName);
+    if (!site && !dry) {
+      const r = run('INSERT INTO sites (tenant_id, name, description, icon, azure_sub) VALUES (?,?,?,?,?)', c.tenant_id, siteName, 'Zaimportowano z Azure', 'cloud', sub.id);
+      site = { id: Number(r.lastInsertRowid) };
+      log('create', 'site', `${siteName} (Azure)`);
+    } else if (site && !dry) run('UPDATE sites SET azure_sub=? WHERE id=?', sub.id, site.id);
+    const known = site ? all('SELECT * FROM networks WHERE site_id=?', site.id) : [];
+    const claimed = new Set(), bySubnet = new Map();
+    for (const vnet of f.vnets) {
+      for (const s of azure.toSubnets(vnet)) {
+        const label = `${vnet.name} / ${s.name}`;
+        if (parseCidr(s.cidr).prefix < 16) { sum.networks.skipped++; sum.errors.push(`${label}: sieć większa niż /16 pominięta`); continue; }
+        if (claimed.has(s.cidr)) { sum.networks.skipped++; sum.errors.push(`${label}: ${s.cidr} już zaimportowano z innego VNetu`); continue; }
+        claimed.add(s.cidr);
+        const gateway = intToIp(usableRange(s.cidr)[0]);        // Azure: .1 is the default gateway of every subnet
+        let net = known.find((k) => k.cidr === s.cidr);
+        if (net) {
+          if (!net.gateway) {
+            if (!dry) run('UPDATE networks SET gateway=? WHERE id=?', gateway, net.id);
+            net.gateway = gateway; sum.networks.updated++;
+          }
+        } else {
+          sum.networks.created++;
+          if (dry) net = { id: null, cidr: s.cidr, gateway };
+          else {
+            const r = run(`INSERT INTO networks (site_id, name, cidr, vlan, gateway, dhcp_start, dhcp_end, dns, description, auto_scan) VALUES (?,?,?,?,?,?,?,?,?,0)`,
+              site.id, label.slice(0, 80), s.cidr, null, gateway, '', '', '', `Azure VNet ${vnet.name} (${vnet.location ?? ''}), ${azure.resourceGroup(vnet.id)}`);
+            net = { id: Number(r.lastInsertRowid), site_id: site.id, cidr: s.cidr, gateway };
+            log('create', 'network', `${label} (${s.cidr}) z Azure`);
+          }
+          known.push(net);
+        }
+        bySubnet.set(s.id, net);
+      }
+    }
+    for (const it of f.items) {
+      const net = bySubnet.get(it.subnetId) ?? known.find((k) => inCidr(it.ip, k.cidr));
+      if (!net || it.ip === networkAddr(net.cidr) || it.ip === broadcastAddr(net.cidr)) { sum.entries.skipped++; continue; }
+      const mac = normalizeMac(it.mac) || '';
+      const e = net.id ? one('SELECT * FROM entries WHERE network_id=? AND ip=?', net.id, it.ip) : null;
+      const fqdn = it.primary ? azure.hostnameOf(it.name) : '';
+      if (e) {
+        const fill = {};
+        if (!e.mac && mac) fill.mac = mac;
+        if (!e.fqdn && fqdn && !one('SELECT 1 FROM entries x JOIN networks n ON n.id=x.network_id WHERE n.site_id=? AND x.fqdn=?', site.id, fqdn)) fill.fqdn = fqdn;
+        if (Object.keys(fill).length) {
+          sum.entries.updated++;
+          if (!dry) { run(`UPDATE entries SET mac=?, fqdn=?, updated_at=datetime('now') WHERE id=?`, fill.mac ?? e.mac, fill.fqdn ?? e.fqdn, e.id); hist(net.id, e.id, e.ip, 'update', diff(e, { ...e, ...fill }), who); }
+        }
+        if (!dry && mac) observeMac(e, mac, who);
+        continue;
+      }
+      sum.entries.created++;
+      if (dry || !net.id) continue;
+      const dup = fqdn && one('SELECT 1 FROM entries x JOIN networks n ON n.id=x.network_id WHERE n.site_id=? AND x.fqdn=?', site.id, fqdn);
+      const entry = { ip: it.ip, fqdn: dup ? '' : fqdn, alias: it.name.slice(0, 100), mac, type: it.kind === 'vm' ? 'vm' : 'other', status: 'used', tags: `azure,${it.kind}`, description: `${it.description}${it.method ? ` (${it.method})` : ''}`.slice(0, 500) };
+      const r = run(`INSERT INTO entries (network_id, ip, ip_num, fqdn, alias, mac, type, status, tags, description) VALUES (?,?,?,?,?,?,?,?,?,?)`,
+        net.id, entry.ip, ipToInt(entry.ip), entry.fqdn, entry.alias, mac, entry.type, entry.status, entry.tags, entry.description);
+      hist(net.id, Number(r.lastInsertRowid), entry.ip, 'create', snapshot(entry, 'new'), who);
+    }
+    return sum;
+  }
+  async function azureSync({ dry = false } = {}) {
+    const c = azureCfg(); azReady(c);
+    if (!c.tenant_id || !one('SELECT id FROM tenants WHERE id=?', c.tenant_id)) throw bad('Wybierz tenanta, do którego trafią zaimportowane lokalizacje');
+    const subs = c.subscriptions.filter((x) => x.enabled);
+    if (!subs.length) throw bad('Zaznacz co najmniej jedną subskrypcję');
+    const cl = azClient(c), results = [];
+    for (const sub of subs) {
+      let fetched;
+      try { fetched = await azureFetchSub(cl, sub); }
+      catch (e) { results.push({ console: sub.name, sites: 0, networks: {}, entries: {}, errors: [e.message] }); continue; }
+      db.exec('BEGIN');
+      try { results.push(azureApply(c, sub, fetched, dry)); db.exec(dry ? 'ROLLBACK' : 'COMMIT'); }
+      catch (e) { db.exec('ROLLBACK'); results.push({ console: sub.name, sites: 0, networks: {}, entries: {}, errors: [e.message] }); }
+    }
+    const last = { at: new Date().toISOString(), dry, ok: results.every((r) => !r.errors.length), results };
+    if (!dry) saveSetting('azure_last', last);
+    return last;
+  }
+  route('POST', '/api/admin/azure/sync', async ({ body, user, ctx }) => {
+    needGlobalAdmin(user); sessionOnly(ctx);
+    actor = user.username;
+    try { const r = await azureSync({ dry: !!body.dry_run }); if (!r.dry) log('update', 'settings', `synchronizacja Azure: ${r.ok ? 'OK' : 'z błędami'}`); return r; }
+    catch (e) { azFail(e); }
+  });
+  const runAzureAuto = async () => {
+    const c = azureCfg();
+    if (!c.auto_sync || !c.client_secret) return null;
+    actor = 'azure';
+    return azureSync().catch((e) => { console.error('Azure sync failed:', e.message); return null; });
+  };
+
   route('GET', '/api/openapi.json', () => buildOpenApi(routes, { version: opts.version }), { public: true });
   route('GET', '/api/docs', () => ({ raw: DOCS_HTML, contentType: 'text/html; charset=utf-8', inline: true }), { public: true });
 
-  return Object.assign(handle, { routes, runUnifiAuto, runScheduledScans, runDailyBackup: () => runDailyIfDue(db, bdeps()) });
+  return Object.assign(handle, { routes, runUnifiAuto, runAzureAuto, runScheduledScans, runDailyBackup: () => runDailyIfDue(db, bdeps()) });
 }

@@ -61,13 +61,13 @@ function GoogleLogin({ notify }) {
 
 const when = (iso) => new Date(iso).toLocaleString(locale(), { dateStyle: 'short', timeStyle: 'short' });
 
-function SyncResult({ r }) {
+function SyncResult({ r, azure = false }) {
   return (
     <div class={`last-run ${r.ok ? 'ok' : 'bad'}`}>
       <div><b>{r.dry ? t('Podgląd (nic nie zapisano)') : r.ok ? t('Ostatnia synchronizacja') : t('Synchronizacja z błędami')}</b> · {when(r.at)}</div>
       {r.results.map((c) => (
         <div class="small-text">
-          <b>{c.console}</b>: {c.errors.length && !c.sites ? '' : `${t('sieci')} +${c.networks.created} ~${c.networks.updated}, ${t('wpisy')} +${c.entries.created} ~${c.entries.updated}, ${t('z puli DHCP')} ${c.entries.pooled}, ${t('pominięte')} ${c.entries.skipped}, ${t('aliasy z UniFi')} ${c.aliases?.updated ?? 0}${c.aliases?.conflicts ? `, ${t('konflikty aliasów (wygrywa IPAM)')} ${c.aliases.conflicts}` : ''}`}
+          <b>{c.console}</b>: {c.errors.length && !c.sites ? '' : azure ? `${t('sieci')} +${c.networks.created} ~${c.networks.updated}, ${t('wpisy')} +${c.entries.created} ~${c.entries.updated}, ${t('pominięte')} ${c.entries.skipped}` : `${t('sieci')} +${c.networks.created} ~${c.networks.updated}, ${t('wpisy')} +${c.entries.created} ~${c.entries.updated}, ${t('z puli DHCP')} ${c.entries.pooled}, ${t('pominięte')} ${c.entries.skipped}, ${t('aliasy z UniFi')} ${c.aliases?.updated ?? 0}${c.aliases?.conflicts ? `, ${t('konflikty aliasów (wygrywa IPAM)')} ${c.aliases.conflicts}` : ''}`}
           {c.errors.map((e) => <div class="error-text">{t(e)}</div>)}
         </div>
       ))}
@@ -166,11 +166,81 @@ function Unifi({ tenants, notify }) {
   );
 }
 
+function Azure({ tenants, notify }) {
+  const [c, setC] = useState(null);
+  const [f, setF] = useState({ directory_id: '', client_id: '', client_secret: '' });
+  const [busy, setBusy] = useState('');
+  const [res, setRes] = useState(null);
+  const [diag, setDiag] = useState(null);
+  useEffect(() => { api.azure().then((r) => { setC(r); setRes(r.last); setF((x) => ({ ...x, directory_id: r.directory_id, client_id: r.client_id })); }).catch((e) => notify(e.message, 'error')); }, []);
+  if (!c) return null;
+  const act = async (name, fn, done) => {
+    setBusy(name);
+    try { done(await fn()); } catch (e) { notify(e.message, 'error'); }
+    setBusy('');
+  };
+  const save = () => act('save', () => api.saveAzure(f), (r) => { setC(r); setF({ ...f, client_secret: '' }); notify('Zapisano'); });
+  const discover = () => act('discover', api.azureDiscover, (r) => { setC(r); notify(t('Znaleziono subskrypcji: {n}', { n: r.subscriptions.length })); });
+  const patch = (changes) => act('patch', () => api.saveAzure(changes), setC);
+  const sync = (dry) => act(dry ? 'dry' : 'sync', () => api.azureSync(dry), (r) => { setRes(r); notify(dry ? 'Podgląd gotowy' : r.ok ? 'Synchronizacja zakończona' : 'Synchronizacja z błędami', r.ok ? 'ok' : 'error'); });
+  const ready = c.secret_set && c.tenant_id && c.subscriptions.some((x) => x.enabled);
+  const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
+  return (
+    <section class="card span-2">
+      <h3>Azure (VNet)</h3>
+      <p class="muted small-text">{t('Import z Azure przez Service Principal (tylko odczyt, rola Reader): każda subskrypcja to lokalizacja, każda podsieć VNetu to sieć (z bramą .1), a interfejsy sieciowe maszyn wirtualnych, private endpointy i wewnętrzne load balancery trafiają jako wpisy.')}</p>
+      <div class="form-grid">
+        <Field label="Directory (tenant) ID" hint="Microsoft Entra ID → Overview"><input class="mono" value={f.directory_id} onInput={set('directory_id')} placeholder="00000000-0000-0000-0000-000000000000" /></Field>
+        <Field label="Client (application) ID" hint="App registration → Overview"><input class="mono" value={f.client_id} onInput={set('client_id')} placeholder="00000000-0000-0000-0000-000000000000" /></Field>
+        <Field label="Client secret" span hint={c.secret_set ? 'zapisany — wpisz nowy, by go zmienić (pamiętaj o dacie ważności sekretu)' : 'Certificates & secrets → New client secret (wartość, nie ID)'}>
+          <input type="password" autocomplete="off" value={f.client_secret} placeholder={c.secret_set ? t('(zapisany)') : ''} onInput={set('client_secret')} /></Field>
+      </div>
+      <div class="form-actions">
+        <button class="btn primary" disabled={!!busy || !f.directory_id || !f.client_id || (!c.secret_set && !f.client_secret)} onClick={save}>{t('Zapisz dane SPN')}</button>
+        <button class="btn ghost" disabled={!c.secret_set || !!busy} onClick={discover} title={t('Loguje się jako SPN i wczytuje subskrypcje — to także test danych logowania')}>{busy === 'discover' ? t('Szukam…') : t('Pobierz listę subskrypcji')}</button>
+      </div>
+      {c.subscriptions.length > 0 && (
+        <div class="unifi-consoles">
+          <h4>{t('Subskrypcje do synchronizacji')}</h4>
+          {c.subscriptions.map((x) => (
+            <label class="toggle"><input type="checkbox" checked={x.enabled} onChange={(e) => patch({ subscriptions: c.subscriptions.map((y) => ({ id: y.id, enabled: y.id === x.id ? e.target.checked : y.enabled })) })} /> <b>{x.name}</b> <span class="muted small-text mono">{x.id}</span></label>
+          ))}
+          <div class="form-grid">
+            <Field label="Tenant dla zaimportowanych lokalizacji" hint="Każda subskrypcja trafi do osobnej lokalizacji o jej nazwie">
+              <select value={c.tenant_id ?? ''} onChange={(e) => patch({ tenant_id: e.target.value ? Number(e.target.value) : null })}>
+                <option value="">{t('— wybierz —')}</option>
+                {tenants.map((t) => <option value={t.id}>{t.name}</option>)}
+              </select></Field>
+          </div>
+          <label class="toggle"><input type="checkbox" checked={c.auto_sync} onChange={(e) => patch({ auto_sync: e.target.checked })} /> {t('Synchronizuj automatycznie co godzinę')}</label>
+          <div class="form-actions">
+            <button class="btn ghost" disabled={!c.subscriptions.some((x) => x.enabled) || !!busy} onClick={() => act('diag', api.azureDiagnose, setDiag)} title={t('Tylko odczyt — pokazuje, ile VNetów, interfejsów i load balancerów widzi SPN, albo czego mu brakuje')}>{busy === 'diag' ? t('Sprawdzam…') : t('Sprawdź dostęp')}</button>
+            <button class="btn ghost" disabled={!ready || !!busy} onClick={() => sync(true)}>{busy === 'dry' ? t('Liczę…') : t('Podgląd')}</button>
+            <button class="btn primary" disabled={!ready || !!busy} onClick={() => sync(false)}>{busy === 'sync' ? t('Synchronizuję…') : t('Synchronizuj teraz')}</button>
+          </div>
+        </div>
+      )}
+      {diag && (
+        <div class="last-run">
+          <div><b>{t('Dostęp SPN do subskrypcji')}</b> ({t('tylko odczyt, nic nie zostało zmienione')})</div>
+          {diag.results.map((d) => (
+            <div class="small-text"><b>{d.subscription}</b>: VNet {d.vnets ?? '✖'} · {t('interfejsy')} {d.interfaces ?? '✖'} · load balancer {d.load_balancers ?? '✖'}
+              {(d.errors ?? []).map((e) => <div class="error-text">{t(e.replace(/^[a-z_]+: /, ''))}</div>)}</div>
+          ))}
+        </div>
+      )}
+      {res && <SyncResult r={res} azure />}
+      <p class="muted small-text">{t('Istniejące wpisy i sieci nie są nadpisywane — uzupełniane są tylko puste pola. Podsieci większe niż /16 i IPv6 są pomijane. Adresy zarezerwowane przez Azure (.0–.3 i ostatni) nie trafiają do wpisów.')}</p>
+    </section>
+  );
+}
+
 function Integrations({ notify, tenants }) {
   return (
     <div class="admin-grid">
       <GoogleLogin notify={notify} />
       <Unifi tenants={tenants} notify={notify} />
+      <Azure tenants={tenants} notify={notify} />
     </div>
   );
 }

@@ -45,6 +45,7 @@ if (SCAN_MIN > 0) {
 
 // UniFi import every hour when enabled in the admin panel (a no-op otherwise).
 setInterval(() => api.runUnifiAuto(), 3600_000).unref();
+setInterval(() => api.runAzureAuto(), 3600_000).unref();
 
 const parseCookies = (h = '') =>
   Object.fromEntries(h.split(';').map((c) => c.trim().split(/=(.*)/s)).filter((p) => p[0]).map((p) => [p[0], p[1] ?? '']));

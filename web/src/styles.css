@@ -477,3 +477,4 @@ button.tag:hover { color: var(--accent); }
 .sys-row td.row-actions { background: var(--surface-2); }
 td .chip + .chip { margin-left: 4px; }
 .scan-list li > .muted { flex: 1; text-align: left; }
+.form-actions + .muted.small-text { margin-top: 12px; }

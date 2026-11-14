@@ -107,6 +107,10 @@ Networks with "Scan automatically" enabled are pinged every `SCAN_INTERVAL_MIN` 
 
 The **DNS** button on a network resolves the FQDN of every entry (from the server, so it honours its resolver and `/etc/hosts`) and lists names with no A record or pointing at another address.
 
+## Azure (VNets and their devices)
+
+*Administration → Integrations → Azure (VNet)*. Create an app registration (service principal) in Microsoft Entra ID, add a client secret, and give it the **Reader** role on the subscriptions you want to import. Enter the directory (tenant) ID, client ID and secret, press *Fetch subscription list* (this also tests the credentials), tick the subscriptions and pick the tenant the locations should land in. Every subscription becomes a location, every VNet subnet a network named `vnet / subnet` with the `.1` gateway (Azure's default gateway), and the private addresses of network interfaces (VMs, private endpoints) and internal load balancer frontends become entries (name, MAC, tags `azure,vm`…). The import is one-way and never overwrites what you edited — only empty fields are filled; subnets larger than /16 and IPv6 are skipped. *Check access* is a read-only probe that shows what the principal can see. Azure reserves `.0`–`.3` and the last address of every subnet, so those never become entries.
+
 ## Address planning and VLANs
 
 Open *Address planning* under a tenant in the sidebar. A **pool** is a big block you own (`10.0.0.0/8`, `172.16.0.0/12`…); the page shows it as one bar with every network at its real position, the free aligned blocks, and *Allocate subnet* hands the first free block of the chosen size to a location (it creates the network, with the first usable address as the gateway and an optional VLAN). Pools of a tenant cannot overlap; deleting a pool keeps the networks carved out of it. The **VLAN** tab is a per-tenant registry (valid for the whole tenant or for one location); networks keep a plain VLAN number which is matched against it. Pools and VLANs are managed by tenant admins, readers can look.
