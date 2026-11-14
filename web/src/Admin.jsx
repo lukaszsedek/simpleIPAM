@@ -5,7 +5,7 @@ import { Users } from './Users.jsx';
 import { Backups } from './Backups.jsx';
 import { t, locale } from './i18n.js';
 
-const TABS = [['users', 'Użytkownicy', 'users'], ['backups', 'Kopie zapasowe', 'download'], ['settings', 'Ustawienia', 'settings'], ['audit', 'Dziennik zmian', 'history']];
+const TABS = [['users', 'Użytkownicy', 'users'], ['integrations', 'Integracje', 'globe'], ['backups', 'Kopie zapasowe', 'download'], ['settings', 'Ustawienia', 'settings'], ['audit', 'Dziennik zmian', 'history']];
 
 function Audit() {
   const [rows, setRows] = useState([]);
@@ -166,7 +166,16 @@ function Unifi({ tenants, notify }) {
   );
 }
 
-function Settings({ notify, tenants }) {
+function Integrations({ notify, tenants }) {
+  return (
+    <div class="admin-grid">
+      <GoogleLogin notify={notify} />
+      <Unifi tenants={tenants} notify={notify} />
+    </div>
+  );
+}
+
+function Settings({ notify }) {
   const [reg, setReg] = useState(true);
   const [sys, setSys] = useState(null);
   useEffect(() => { api.me().then((r) => setReg(r.registration_open)); api.system().then(setSys).catch((e) => notify(e.message, 'error')); }, []);
@@ -180,8 +189,6 @@ function Settings({ notify, tenants }) {
         <label class="toggle"><input type="checkbox" checked={reg} onChange={toggle} /> {t('Otwarta rejestracja nowych użytkowników')}</label>
         <p class="muted small-text">{t('Nowe konta nie mają dostępu do żadnych danych, dopóki nie nadasz im roli. Pierwsze konto w systemie zawsze może się zarejestrować.')}</p>
       </section>
-      <GoogleLogin notify={notify} />
-      <Unifi tenants={tenants} notify={notify} />
       <section class="card">
         <h3>{t('System')}</h3>
         {sys ? (
@@ -216,8 +223,9 @@ export function Admin({ tab, tenants, me, notify, onUsersChanged }) {
         ))}
       </div>
       {tab === 'users' && <Users tenants={tenants} me={me} notify={notify} onChanged={onUsersChanged} />}
+      {tab === 'integrations' && <Integrations notify={notify} tenants={tenants} />}
       {tab === 'backups' && <Backups notify={notify} />}
-      {tab === 'settings' && <Settings notify={notify} tenants={tenants} />}
+      {tab === 'settings' && <Settings notify={notify} />}
       {tab === 'audit' && <Audit />}
     </div>
   );

@@ -109,6 +109,7 @@ export default {
   "Import z Twoich konsol UniFi (Cloud Gateway, UDM…) przez konto Ubiquiti: sieci z VLAN-ami i zakresem DHCP, urządzenia sieciowe i klienci o stałych adresach jako wpisy, klienci z puli DHCP jako „nowe urządzenia”. Adresy MAC z UniFi zasilają wykrywanie zmian MAC.": "Import aus Ihren UniFi-Konsolen (Cloud Gateway, UDM…) über das Ubiquiti-Konto: Netzwerke mit VLANs und DHCP-Bereich, Netzwerkgeräte und Clients mit festen Adressen als Einträge, Clients aus dem DHCP-Pool als „neue Geräte“. MAC-Adressen aus UniFi speisen die Erkennung von MAC-Änderungen.",
   "Informacje": "Informationen",
   "Inne": "Sonstige",
+  "Integracje": "Integrationen",
   "Jak skonfigurować?": "Wie richte ich es ein?",
   "Jak uzyskać Client ID i Secret?": "Wie bekomme ich Client-ID und Secret?",
   "Jeszcze nie wykonano żadnej kopii.": "Es wurde noch keine Sicherung erstellt.",
