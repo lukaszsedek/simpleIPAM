@@ -239,7 +239,16 @@ export function App() {
   const [palette, setPalette] = useState(false);
   const [nav, setNav] = useState(false);
   const [menu, setMenu] = useState(false);   // profile dropdown
+  const [langMenu, setLangMenu] = useState(false);
   const menuRef = useRef(null);
+  const langRef = useRef(null);
+  useEffect(() => {
+    if (!langMenu) return undefined;
+    const off = (e) => { if (!langRef.current?.contains(e.target)) setLangMenu(false); };
+    const esc = (e) => { if (e.key === 'Escape') setLangMenu(false); };
+    addEventListener('mousedown', off); addEventListener('keydown', esc);
+    return () => { removeEventListener('mousedown', off); removeEventListener('keydown', esc); };
+  }, [langMenu]);
   useEffect(() => {
     if (!menu) return undefined;
     const off = (e) => { if (!menuRef.current?.contains(e.target)) setMenu(false); };
@@ -380,6 +389,24 @@ export function App() {
       <a class="skip-link" href="#content" onClick={(e) => { e.preventDefault(); document.getElementById('content')?.focus(); }}>{tx('Przejdź do treści')}</a>
       <main id="content" tabIndex={-1}>
         <header class="topbar">
+          <button class="btn ghost small icon-only" onClick={toggleTheme} aria-label={`${tx('Motyw')}: ${tx({ light: 'jasny', dark: 'ciemny', system: 'systemowy' }[theme])}`}
+            title={`${tx('Motyw')}: ${tx({ light: 'jasny', dark: 'ciemny', system: 'systemowy' }[theme])}`}>
+            <Icon name={theme === 'dark' ? 'moon' : theme === 'light' ? 'sun' : 'monitor'} size={16} />
+          </button>
+          <div class="lang" ref={langRef}>
+            <button class="btn ghost small" aria-haspopup="menu" aria-expanded={langMenu} aria-label={tx('Język')} title={tx('Język')} onClick={() => setLangMenu(!langMenu)}>
+              <Icon name="globe" size={16} /><span>{getLang().toUpperCase()}</span>
+            </button>
+            {langMenu && (
+              <div class="menu" role="menu">
+                {Object.entries(LANGS).map(([k, l]) => (
+                  <button role="menuitemradio" aria-checked={getLang() === k} class={getLang() === k ? 'on' : ''} onClick={() => { setLang(k); setLangMenu(false); }}>
+                    <b class="mono">{k.toUpperCase()}</b>{l}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
           {isAdmin && (
             <a class={`btn ghost small admin-link ${adminTab ? 'on' : ''}`} href="#/admin" title={tx('Administracja')}>
               <Icon name="settings" size={16} /><span>{tx('Administracja')}</span>{me.pending_users > 0 && <b class="badge" title={tx('Użytkownicy bez uprawnień')}>{me.pending_users}</b>}
@@ -396,10 +423,6 @@ export function App() {
                 <div class="menu-head"><b>{me.username}</b><span class={`role-badge ${me.global_role}`}>{ROLE_LABELS[me.global_role]}</span></div>
                 <button role="menuitem" onClick={() => { setMenu(false); setModal({ kind: 'tokens' }); }}><Icon name="code" size={16} />{tx('Tokeny API')}</button>
                 <button role="menuitem" onClick={() => { setMenu(false); setModal({ kind: 'pw' }); }}><Icon name="key" size={16} />{me.has_password ? tx('Zmień hasło') : tx('Hasło i konto Google')}</button>
-                <button role="menuitem" onClick={toggleTheme}><Icon name={theme === 'dark' ? 'moon' : theme === 'light' ? 'sun' : 'settings'} size={16} />{tx('Motyw')}: {tx({ light: 'jasny', dark: 'ciemny', system: 'systemowy' }[theme])}</button>
-                <div class="menu-lang" role="group" aria-label={tx('Język')}>
-                  {Object.entries(LANGS).map(([k, l]) => <button type="button" class={getLang() === k ? 'on' : ''} onClick={() => setLang(k)}>{k.toUpperCase()}<span class="sr-only"> {l}</span></button>)}
-                </div>
                 <hr />
                 <button role="menuitem" class="danger" onClick={() => { setMenu(false); logout(); }}><Icon name="logout" size={16} />{tx('Wyloguj')}</button>
               </div>

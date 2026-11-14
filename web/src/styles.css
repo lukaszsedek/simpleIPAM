@@ -423,3 +423,10 @@ th.sortable { cursor: pointer; }
 .toggle { white-space: normal; align-items: flex-start; }
 .toggle input { margin-top: 3px; flex: none; }
 .unifi-consoles { min-width: 0; }
+
+.icon-only { padding-left: 9px; padding-right: 9px; }
+.lang { position: relative; }
+.lang .btn { display: inline-flex; align-items: center; gap: 6px; }
+.lang .menu { right: 0; left: auto; min-width: 150px; }
+.lang .menu button { display: flex; gap: 10px; align-items: center; width: 100%; }
+.lang .menu button.on { color: var(--accent); }
