@@ -5,6 +5,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+## [0.8.2] - 2026-11-14
+
 ### Changed
 - Theme and language switches are icon buttons in the top bar, next to Administration (the language one opens a small PL / EN / DE menu); they were in the profile menu before.
 
