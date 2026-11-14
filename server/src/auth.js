@@ -58,6 +58,33 @@ export function createAuth(db) {
     } catch (e) { db.exec('ROLLBACK'); throw e; }
   }
 
+  // Sign-in with an external identity. Unknown identities get a new account without any role (None), exactly like
+  // self-registration, and are refused while registration is closed. The first account must be created locally.
+  function loginWithIdentity(provider, subject, { email = '', name = '' } = {}) {
+    const known = one('SELECT u.* FROM user_identities i JOIN users u ON u.id = i.user_id WHERE i.provider=? AND i.subject=?', provider, subject);
+    if (known) return { user: known, token: startSession(known.id), created: false };
+    if (one('SELECT COUNT(*) AS n FROM users').n === 0) throw new HttpError(409, 'Najpierw utwórz konto administratora (pierwsze uruchomienie)');
+    if (one("SELECT value FROM settings WHERE key='registration_open'")?.value === '0') {
+      throw new HttpError(403, 'Rejestracja jest wyłączona. Poproś administratora o konto.');
+    }
+    const base = (String(email).split('@')[0] || String(name) || 'user').replace(/[^a-zA-Z0-9._-]/g, '').slice(0, 28).padEnd(3, '_');
+    let username = base;
+    for (let i = 2; one('SELECT id FROM users WHERE username = ?', username); i++) username = `${base}${i}`;
+    db.exec('BEGIN IMMEDIATE');
+    try {
+      const id = Number(run('INSERT INTO users (username, password_hash) VALUES (?,?)', username, hashPassword(randomBytes(24).toString('hex'))).lastInsertRowid);
+      run('INSERT INTO user_identities (provider, subject, user_id, email) VALUES (?,?,?,?)', provider, subject, id, email);
+      db.exec('COMMIT');
+      return { user: { id, username }, token: startSession(id), created: true };
+    } catch (e) { db.exec('ROLLBACK'); throw e; }
+  }
+  function linkIdentity(userId, provider, subject, email = '') {
+    const other = one('SELECT user_id FROM user_identities WHERE provider=? AND subject=?', provider, subject);
+    if (other && other.user_id !== userId) throw new HttpError(409, 'To konto Google jest już połączone z innym użytkownikiem');
+    run('INSERT INTO user_identities (provider, subject, user_id, email) VALUES (?,?,?,?) ON CONFLICT(provider, subject) DO UPDATE SET email=excluded.email', provider, subject, userId, email);
+  }
+  const identityOf = (userId, provider) => one('SELECT email FROM user_identities WHERE user_id=? AND provider=?', userId, provider)?.email ?? null;
+
   function login(username, password, ip) {
     username = String(username ?? '').trim();
     const key = `${ip}|${username.toLowerCase()}`;
@@ -117,5 +144,5 @@ export function createAuth(db) {
 
   const globalAdminCount = () => one("SELECT COUNT(*) AS n FROM role_assignments WHERE site_id IS NULL AND tenant_id IS NULL AND role='admin'").n;
 
-  return { register, login, logout, sessionUser, setPassword, checkPassword, dropSessions, rolesOf, effective, effectiveTenant, globalAdminCount, createToken, listTokens, deleteToken, tokenUser };
+  return { register, login, loginWithIdentity, linkIdentity, identityOf, logout, sessionUser, setPassword, checkPassword, dropSessions, rolesOf, effective, effectiveTenant, globalAdminCount, createToken, listTokens, deleteToken, tokenUser };
 }

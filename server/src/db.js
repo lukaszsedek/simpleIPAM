@@ -136,6 +136,14 @@ function openRaw(path) {
       password_hash TEXT NOT NULL,
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
+    -- Sign-in with an external identity provider (Google): (provider, subject) is stable, e-mail may change.
+    CREATE TABLE IF NOT EXISTS user_identities (
+      provider TEXT NOT NULL,
+      subject TEXT NOT NULL,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      email TEXT NOT NULL DEFAULT '',
+      PRIMARY KEY (provider, subject)
+    );
     CREATE TABLE IF NOT EXISTS sessions (
       token_hash TEXT PRIMARY KEY,
       user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,

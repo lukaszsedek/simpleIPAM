@@ -5,6 +5,7 @@ import { HttpError } from './errors.js';
 import { createAuth, RANK, ROLES } from './auth.js';
 import { snapshotBuffer, backupName, listLocal, isBackupName, loadConfig, saveConfig, publicConfig, runBackup, runDailyIfDue, lastBackup, testRemote, setGdriveAuth } from './backup.js';
 import * as gd from './gdrive.js';
+import * as gl from './google-login.js';
 import { readFileSync, rmSync, existsSync, writeFileSync, copyFileSync, mkdirSync, readdirSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import { summarize, validateAndPrepare } from './restore.js';
@@ -505,9 +506,72 @@ export function createApi(db, opts = {}) {
   route('GET', '/api/me', ({ user }) => {
     const me = user ? meOf(user) : null;
     if (me?.global_role === 'admin') me.pending_users = noRoleCount();
-    return { user: me, setup_required: count('users') === 0, registration_open: registrationOpen(), version: opts.version ?? 'dev' };
+    if (me) me.google_email = auth.identityOf(user.id, 'google');
+    return { user: me, setup_required: count('users') === 0, registration_open: registrationOpen(), google_login: googleLogin().ready, version: opts.version ?? 'dev' };
   }, { public: true });
   route('GET', '/api/health', () => ({ ok: true }), { public: true });
+  // ---------- sign in with Google ----------
+  // Separate OAuth client from the Drive one: login needs a "Web application" client with a redirect URI.
+  const googleLogin = () => {
+    let c = {};
+    try { c = JSON.parse(one("SELECT value FROM settings WHERE key='google_login'")?.value ?? '{}'); } catch { /* unset */ }
+    const cfg = { client_id: '', client_secret: '', enabled: false, ...c };
+    return { ...cfg, ready: !!(cfg.enabled && cfg.client_id && cfg.client_secret) };
+  };
+  const glPublic = () => { const { client_secret, ready, ...c } = googleLogin(); return { ...c, secret_set: !!client_secret, ready }; };
+  route('GET', '/api/admin/google-login', ({ user }) => (needGlobalAdmin(user), glPublic()));
+  route('PUT', '/api/admin/google-login', ({ body, user, ctx }) => {
+    needGlobalAdmin(user); sessionOnly(ctx);
+    const c = googleLogin();
+    if (body.client_id !== undefined) {
+      c.client_id = str(body.client_id, 300);
+    }
+    if (str(body.client_secret, 300)) c.client_secret = str(body.client_secret, 300);
+    if (body.enabled !== undefined) c.enabled = !!body.enabled;
+    if (c.enabled && !(c.client_id && c.client_secret)) throw bad('Podaj Client ID i Client Secret, zanim włączysz logowanie przez Google');
+    const { ready, ...store } = c;
+    run("INSERT INTO settings (key, value) VALUES ('google_login', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", JSON.stringify(store));
+    log('update', 'settings', `logowanie przez Google: ${c.enabled ? 'włączone' : 'wyłączone'}`);
+    return glPublic();
+  });
+  const glPending = new Map();   // state -> { verifier, redirectUri, linkUser, expires }
+  route('POST', '/api/auth/google/start', ({ body, user }) => {
+    const cfg = googleLogin();
+    if (!cfg.ready) throw bad('Logowanie przez Google jest wyłączone');
+    let origin;
+    try { origin = new URL(String(body.origin)); } catch { throw bad('Nieprawidłowy adres aplikacji'); }
+    if (!/^https?:$/.test(origin.protocol)) throw bad('Nieprawidłowy adres aplikacji');
+    if (body.link && !user) throw new HttpError(401, 'Wymagane logowanie');
+    for (const [k, v] of glPending) if (v.expires < Date.now()) glPending.delete(k);
+    const state = randomBytes(24).toString('base64url');
+    const { verifier, challenge } = gl.newPkce();
+    const redirectUri = `${origin.origin}/api/auth/google/callback`;
+    glPending.set(state, { verifier, redirectUri, linkUser: body.link ? user.id : null, expires: Date.now() + 10 * 60_000 });
+    return { url: gl.loginUrl({ clientId: cfg.client_id, redirectUri, state, challenge }), redirect_uri: redirectUri };
+  }, { public: true });
+  route('GET', '/api/auth/google/callback', async ({ query, ctx, user }) => {
+    const back = (r) => ({ redirect: `/?google=${encodeURIComponent(r)}#/` });
+    const p = glPending.get(query.state);
+    glPending.delete(query.state);
+    const cfg = googleLogin();
+    if (!p || p.expires < Date.now() || !cfg.ready) return back('state');
+    if (query.error || !query.code) return back('denied');
+    try {
+      const id = await gl.exchangeIdentity(cfg, { code: query.code, redirectUri: p.redirectUri, verifier: p.verifier }, { fetch: opts.fetch });
+      if (p.linkUser) {
+        if (!user || user.id !== p.linkUser) return back('state');
+        auth.linkIdentity(user.id, 'google', id.subject, id.email);
+        actor = user.username;
+        log('update', 'user', `${user.username}: połączono konto Google`);
+        return back('linked');
+      }
+      const r = auth.loginWithIdentity('google', id.subject, id);
+      actor = r.user.username;
+      if (r.created) log('create', 'user', `${r.user.username} (Google)`);
+      ctx.newToken = r.token;
+      return back(r.created ? 'new' : 'ok');
+    } catch (e) { return back(e instanceof HttpError ? `msg:${e.message}` : 'error'); }
+  }, { public: true });
   route('PUT', '/api/settings', ({ body, user }) => {
     needGlobalAdmin(user);
     run("INSERT INTO settings (key, value) VALUES ('registration_open', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", body.registration_open ? '1' : '0');

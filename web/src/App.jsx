@@ -117,7 +117,7 @@ function FreeBlock({ siteId, onPick, notify }) {
   );
 }
 
-function PasswordForm({ onClose, notify }) {
+function PasswordForm({ onClose, notify, me, googleReady }) {
   const [f, setF] = useState({ current: '', password: '' });
   const submit = async (e) => {
     e.preventDefault();
@@ -131,6 +131,13 @@ function PasswordForm({ onClose, notify }) {
         <Field label="Nowe hasło" hint="min. 8 znaków" span><input type="password" autocomplete="new-password" minLength={8} value={f.password} onInput={(e) => setF({ ...f, password: e.target.value })} required /></Field>
         <footer><button type="button" class="btn ghost" onClick={onClose}>Anuluj</button><button class="btn primary">Zmień</button></footer>
       </form>
+      {googleReady && (
+        <div class="google-link">
+          {me.google_email
+            ? <p class="muted small-text">Połączone konto Google: <b>{me.google_email}</b> — możesz się nim logować.</p>
+            : <button type="button" class="btn ghost block" onClick={() => api.googleStart(true).then((r) => { location.href = r.url; }).catch((e) => notify(e.message, 'error'))}>Połącz z kontem Google</button>}
+        </div>
+      )}
     </Modal>
   );
 }
@@ -220,6 +227,7 @@ export function App() {
   const [regOpen, setRegOpen] = useState(true);
   const [version, setVersion] = useState('');
   const [setupRequired, setSetupRequired] = useState(false);
+  const [googleReady, setGoogleReady] = useState(false);
   const [loaded, setLoaded] = useState(false);
   const [open, setOpen] = useState({});
   const [modal, setModal] = useState(null);
@@ -239,7 +247,12 @@ export function App() {
   const go = (to) => { location.hash = to; };
 
   useEffect(() => {
-    api.me().then((r) => { setMe(r.user); setRegOpen(r.registration_open); setVersion(r.version ?? ''); setSetupRequired(!!r.setup_required); }).catch(() => setMe(null));
+    const g = /[?&]google=(ok|new|linked)\b/.exec(location.search)?.[1];      // returned from a successful Google sign-in / link
+    if (g) {
+      history.replaceState(null, '', `${location.pathname}${location.hash}`);
+      notify(g === 'linked' ? 'Konto Google połączone' : g === 'new' ? 'Konto utworzone — poproś administratora o nadanie uprawnień' : 'Zalogowano przez Google');
+    }
+    api.me().then((r) => { setMe(r.user); setRegOpen(r.registration_open); setVersion(r.version ?? ''); setSetupRequired(!!r.setup_required); setGoogleReady(!!r.google_login); }).catch(() => setMe(null));
     const f = () => { setMe(null); setTenants([]); setLoaded(false); };
     addEventListener('ipam:unauth', f);
     return () => removeEventListener('ipam:unauth', f);
@@ -283,7 +296,7 @@ export function App() {
   };
 
   if (me === undefined) return null;
-  if (!me) return <AuthScreen version={version} setup={setupRequired} registrationOpen={regOpen} onAuth={(u) => { setSetupRequired(false); setMe(u); go('#/'); }} />;
+  if (!me) return <AuthScreen google={googleReady} version={version} setup={setupRequired} registrationOpen={regOpen} onAuth={(u) => { setSetupRequired(false); setMe(u); go('#/'); }} />;
 
   return (
     <div class="shell">
@@ -406,7 +419,7 @@ export function App() {
       {modal?.kind === 'net' && <NetworkForm net={modal.net} siteId={modal.siteId} notify={notify} onClose={() => setModal(null)}
         onSaved={(n) => { setModal(null); setRev(rev + 1); reload(); notify('Zapisano'); go(`#/n/${n.id}`); }} />}
       {modal?.kind === 'tokens' && <Tokens notify={notify} onClose={() => setModal(null)} />}
-      {modal?.kind === 'pw' && <PasswordForm notify={notify} onClose={() => setModal(null)} />}
+      {modal?.kind === 'pw' && <PasswordForm me={me} googleReady={googleReady} notify={notify} onClose={() => setModal(null)} />}
       {palette && <Palette sites={sites} go={go} onClose={() => setPalette(false)} />}
       <Toasts items={toasts} />
     </div>

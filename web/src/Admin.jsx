@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'preact/hooks';
 import { api } from './api.js';
-import { Icon } from './ui.jsx';
+import { Icon, Field } from './ui.jsx';
 import { Users } from './Users.jsx';
 import { Backups } from './Backups.jsx';
 
@@ -25,6 +25,39 @@ function Audit() {
 
 const bytes = (n) => (n > 1048576 ? `${(n / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1024))} kB`);
 
+function GoogleLogin({ notify }) {
+  const [c, setC] = useState(null);
+  const [f, setF] = useState({ client_id: '', client_secret: '' });
+  useEffect(() => { api.googleLoginConfig().then((r) => { setC(r); setF({ client_id: r.client_id, client_secret: '' }); }).catch((e) => notify(e.message, 'error')); }, []);
+  if (!c) return null;
+  const save = async (enabled) => {
+    try { const r = await api.saveGoogleLogin({ ...f, enabled }); setC(r); setF({ client_id: r.client_id, client_secret: '' }); notify(enabled ? 'Logowanie przez Google włączone' : 'Zapisano'); }
+    catch (e) { notify(e.message, 'error'); }
+  };
+  return (
+    <section class="card">
+      <h3>Logowanie przez Google</h3>
+      <p class="muted small-text">Użytkownicy mogą się logować kontem Google. Nowe konta powstają bez uprawnień (rola None), tak jak przy zwykłej rejestracji, i podlegają przełącznikowi „Otwarta rejestracja”.</p>
+      <div class="form-grid">
+        <Field label="Client ID" span><input value={f.client_id} onInput={(e) => setF({ ...f, client_id: e.target.value })} placeholder="123…apps.googleusercontent.com" /></Field>
+        <Field label="Client Secret" span hint={c.secret_set ? 'zapisany — wpisz nowy, by go zmienić' : ''}><input type="password" autocomplete="off" value={f.client_secret} placeholder={c.secret_set ? '(zapisany)' : ''} onInput={(e) => setF({ ...f, client_secret: e.target.value })} /></Field>
+      </div>
+      <div class="form-actions">
+        <button class="btn primary" onClick={() => save(true)}>{c.enabled ? 'Zapisz' : 'Zapisz i włącz'}</button>
+        {c.enabled && <button class="btn ghost" onClick={() => save(false)}>Wyłącz</button>}
+      </div>
+      <details class="setup-help">
+        <summary>Jak skonfigurować?</summary>
+        <ol class="small-text muted">
+          <li>W Google Cloud Console utwórz <b>Identyfikator klienta OAuth</b> typu „Aplikacja internetowa” (może być ten sam projekt co dla Dysku, ale to inny klient).</li>
+          <li>Adres przekierowania: <span class="mono">{location.origin}/api/auth/google/callback</span> (Google przyjmuje tylko https lub localhost).</li>
+          <li>Wpisz Client ID i Secret powyżej. Konto, którym już się logujesz hasłem, połączysz z Google w oknie „Zmiana hasła”.</li>
+        </ol>
+      </details>
+    </section>
+  );
+}
+
 function Settings({ notify }) {
   const [reg, setReg] = useState(true);
   const [sys, setSys] = useState(null);
@@ -39,6 +72,7 @@ function Settings({ notify }) {
         <label class="toggle"><input type="checkbox" checked={reg} onChange={toggle} /> Otwarta rejestracja nowych użytkowników</label>
         <p class="muted small-text">Nowe konta nie mają dostępu do żadnych danych, dopóki nie nadasz im roli. Pierwsze konto w systemie zawsze może się zarejestrować.</p>
       </section>
+      <GoogleLogin notify={notify} />
       <section class="card">
         <h3>System</h3>
         {sys ? (

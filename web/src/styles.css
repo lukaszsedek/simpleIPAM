@@ -343,3 +343,9 @@ a.icon-btn { text-decoration: none; }
 .device-code { font-size: 28px; letter-spacing: .12em; font-weight: 700; }
 .setup-help summary { cursor: pointer; font-size: 13px; color: var(--muted); }
 .setup-help ol { padding-left: 18px; display: grid; gap: 6px; }
+
+/* Sign in with Google */
+.or { display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: 12px; }
+.or::before, .or::after { content: ''; flex: 1; height: 1px; background: var(--border); }
+.google-btn { display: inline-flex; align-items: center; justify-content: center; gap: 10px; }
+.google-link { margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--border); }

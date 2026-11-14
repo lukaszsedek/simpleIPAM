@@ -5,7 +5,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import { isBackupName } from './backup-names.js';
 
 const AUTH_URL = 'https://accounts.google.com/o/oauth2/v2/auth';
-const TOKEN_URL = 'https://oauth2.googleapis.com/token';
+export const TOKEN_URL = 'https://oauth2.googleapis.com/token';
 const DEVICE_URL = 'https://oauth2.googleapis.com/device/code';
 const REVOKE_URL = 'https://oauth2.googleapis.com/revoke';
 const API = 'https://www.googleapis.com/drive/v3';
@@ -23,17 +23,17 @@ export function newPkce() {
   return { verifier, challenge: createHash('sha256').update(verifier).digest('base64url') };
 }
 
-export function authUrl({ clientId, redirectUri, state, challenge }) {
+export function authUrl({ clientId, redirectUri, state, challenge, scope = SCOPES, offline = true }) {
   const q = new URLSearchParams({
-    client_id: clientId, redirect_uri: redirectUri, response_type: 'code', scope: SCOPES, state,
-    access_type: 'offline',            // we need a refresh token ...
-    prompt: 'consent',                 // ... and Google only issues one when consent is shown
+    client_id: clientId, redirect_uri: redirectUri, response_type: 'code', scope, state,
     code_challenge: challenge, code_challenge_method: 'S256',
+    ...(offline ? { access_type: 'offline',   // we need a refresh token ...
+      prompt: 'consent' } : {}),                // ... and Google only issues one when consent is shown
   });
   return `${AUTH_URL}?${q}`;
 }
 
-async function postForm(fetch, url, params) {
+export async function postForm(fetch, url, params) {
   const res = await fetch(url, {
     method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' },
     body: new URLSearchParams(params), signal: AbortSignal.timeout(30_000),
