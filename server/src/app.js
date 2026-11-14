@@ -108,14 +108,7 @@ export function createApi(db, opts = {}) {
     for (const [fqdn, rows] of group(siteEntries, 'fqdn')) {
       if (rows.some((r) => r.network_id === net.id)) issues.push({ level: 'warn', text: `FQDN ${fqdn} występuje ${rows.length}× w lokalizacji: ${rows.map((r) => r.ip).join(', ')}` });
     }
-    if (net.dhcp_start) {
-      const [a, b] = [ipToInt(net.dhcp_start), ipToInt(net.dhcp_end)];
-      // Inside the pool an entry is either a dynamic lease or a DHCP reservation; a plain "used" one cannot be told from a static
-      // address set by hand (a conflict), so it is only pointed out.
-      for (const e of entries) if (e.ip_num >= a && e.ip_num <= b && e.status === 'used') {
-        issues.push({ level: 'info', text: `${e.ip} (${e.fqdn || 'bez nazwy'}) leży w puli DHCP jako zajęty — dynamiczny przydział czy adres statyczny (konflikt)? Zrób rezerwację DHCP albo przenieś go poza pulę` });
-      }
-    }
+    // Inside the pool a plain "used" entry is a dynamic lease (a conflicting static address cannot be told apart), so it is not flagged.
     // Outside the pool every address is static, so there is nothing to reserve.
     const inPool = (e) => net.dhcp_start && e.ip_num >= ipToInt(net.dhcp_start) && e.ip_num <= ipToInt(net.dhcp_end);
     for (const e of entries) if (e.status === 'reserved' && !inPool(e)) {

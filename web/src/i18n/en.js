@@ -688,7 +688,6 @@ export default {
   "zignorowano MAC": "MAC ignored",
   "zmieniono": "changed",
   "zmieniono {e}": "changed {e}",
-  "{ip} ({name}) leży w puli DHCP jako zajęty — dynamiczny przydział czy adres statyczny (konflikt)? Zrób rezerwację DHCP albo przenieś go poza pulę": "{ip} ({name}) is inside the DHCP pool as used — a dynamic lease or a static address (a conflict)? Make a DHCP reservation or move it outside the pool",
   "{ip} ({name}) ma status „Zarezerwowany”, ale leży poza pulą DHCP — adres poza pulą jest statyczny, więc nie ma czego rezerwować (zmień status na „Statyczny”)": "{ip} ({name}) has the status “Reserved” but is outside the DHCP pool — an address outside the pool is static, so there is nothing to reserve (change the status to “Static”)",
   "{ip} ({name}): skan widzi MAC {seen}, a wpis ma {mac} — urządzenie wymienione albo adres przejęty?": "{ip} ({name}): the scan sees MAC {seen}, but the entry has {mac} — device replaced or address taken over?",
   "{ip} ({name}): wpis wygasa {date} — usuń go lub przedłuż ważność": "{ip} ({name}): the entry expires on {date} — delete it or extend its validity",

@@ -5,6 +5,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+### Changed
+- Entries inside the DHCP pool without a DHCP reservation are treated as dynamic leases and no longer produce a "static or dynamic?" notice in "To review".
+
 ## [0.12.0] - 2026-11-14
 
 ### Added
