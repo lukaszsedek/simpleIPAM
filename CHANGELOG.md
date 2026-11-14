@@ -5,6 +5,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-11-14
+
 ### Added
 - UniFi import now also brings network devices (gateways, switches, access points) as typed entries (model and firmware in the description), and shows which AP/switch each client is attached to ("↳ AP Salon" under the FQDN).
 
