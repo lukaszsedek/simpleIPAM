@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { api } from './api.js';
-import { Icon, Modal, Field, Logo, Toasts, SITE_ICONS, ROLE_LABELS } from './ui.jsx';
+import { Icon, Modal, Field, Logo, Toasts, ConfirmHost, ask, SITE_ICONS, ROLE_LABELS } from './ui.jsx';
 import { Network } from './Network.jsx';
 import { Admin } from './Admin.jsx';
+import { Issues } from './Issues.jsx';
 import { AuthScreen } from './Auth.jsx';
 // `tx`, not `t`: tenants are called `t` all over this file.
 import { t as tx, useLang, setLang, getLang, LANGS } from './i18n.js';
@@ -261,10 +262,11 @@ export function App() {
   const [theme, setTheme] = useState(() => { try { return localStorage.theme || 'system'; } catch { return 'system'; } });   // light | dark | system
   const tid = useRef(0);
 
-  const notify = (text, kind = 'ok') => {
+  // `action` ({ label, fn }) adds a button to the toast, e.g. "Cofnij"; such toasts stay a little longer.
+  const notify = (text, kind = 'ok', action = null) => {
     const id = ++tid.current;
-    setToasts((t) => [...t, { id, text, kind }]);
-    setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), 3500);
+    setToasts((t) => [...t, { id, text, kind, action }]);
+    setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), action ? 8000 : 3500);
   };
   const reload = () => api.overview().then((t) => { setTenants(t); setLoaded(true); }).catch((e) => notify(e.message, 'error'));
   const go = (to) => { location.hash = to; };
@@ -303,6 +305,7 @@ export function App() {
   };
 
   const netId = (/^#\/n\/(\d+)/.exec(hash) ?? [])[1];
+  const issueTotal = sites.reduce((n, s) => n + s.networks.reduce((m, x) => m + (x.stats.issues ?? 0), 0), 0);
   // Locations start collapsed (just the list); the one holding the open network is shown expanded so you can see where you are.
   const siteOpen = (s) => open[s.id] ?? s.networks.some((n) => String(n.id) === netId);
   const isAdmin = me?.global_role === 'admin';
@@ -312,15 +315,15 @@ export function App() {
   const logout = async () => { await api.logout(); setOpen({}); setMe(null); setTenants([]); setLoaded(false); go('#/'); };
 
   const delTenant = async (t) => {
-    if (!confirm(tx('Usunąć tenanta „{name}” razem z {n} lokalizacjami i wszystkimi danymi?', { name: t.name, n: t.sites.length }))) return;
+    if (!await ask(tx('Usunąć tenanta „{name}” razem z {n} lokalizacjami i wszystkimi danymi?', { name: t.name, n: t.sites.length }), { title: 'Usuń tenanta' })) return;
     await api.delTenant(t.id); notify('Usunięto tenanta'); go('#/'); reload();
   };
   const delSite = async (s) => {
-    if (!confirm(tx('Usunąć lokalizację „{name}” razem ze wszystkimi sieciami i wpisami?', { name: s.name }))) return;
+    if (!await ask(tx('Usunąć lokalizację „{name}” razem ze wszystkimi sieciami i wpisami?', { name: s.name }), { title: 'Usuń lokalizację' })) return;
     await api.delSite(s.id); notify('Usunięto lokalizację'); go('#/'); reload();
   };
   const delNet = async (n) => {
-    if (!confirm(tx('Usunąć sieć „{name}” ({cidr}) razem ze wszystkimi wpisami?', { name: n.name, cidr: n.cidr }))) return;
+    if (!await ask(tx('Usunąć sieć „{name}” ({cidr}) razem ze wszystkimi wpisami?', { name: n.name, cidr: n.cidr }), { title: 'Usuń sieć' })) return;
     await api.delNetwork(n.id); notify('Usunięto sieć'); go('#/'); reload();
   };
 
@@ -335,6 +338,7 @@ export function App() {
           <Icon name="search" size={16} /><span>{tx('Szukaj…')}</span><kbd>⌘K</kbd>
         </button>
         <nav>
+          <a class={`side-link ${hash === '#/issues' ? 'on' : ''}`} href="#/issues"><Icon name="check" size={16} /><span>{tx('Do sprawdzenia')}</span>{issueTotal > 0 && <b class="badge warn">{issueTotal}</b>}</a>
           {tenants.map((t) => (
             <div class="tenant">
               <div class="tenant-head">
@@ -365,6 +369,7 @@ export function App() {
                             <span class="net-top">
                               <span class="net-name">{n.name}</span>
                               {n.stats.new_hosts > 0 && <b class="badge" title={tx('Nowe urządzenia')}>{n.stats.new_hosts}</b>}
+                              {n.stats.issues > 0 && <b class="badge warn" title={tx('Do sprawdzenia')}>{n.stats.issues}</b>}
                               {n.vlan && <span class="vlan-pill">VLAN {n.vlan}</span>}
                             </span>
                             <span class="net-bottom"><span class="mono">{n.cidr}</span><span>{pct}%</span></span>
@@ -430,12 +435,14 @@ export function App() {
           </div>
         </header>
         <button class="menu-btn icon-btn" onClick={() => setNav(!nav)} aria-label="Menu"><Icon name="menu" /></button>
-        {adminTab ? <Admin tab={adminTab} tenants={tenants} me={me} notify={notify} onUsersChanged={refreshMe} />
+        {hash === '#/issues' ? <Issues notify={notify} />
+          : adminTab ? <Admin tab={adminTab} tenants={tenants} me={me} notify={notify} onUsersChanged={refreshMe} />
           : netId ? <Network key={`${netId}-${rev}`} id={netId} notify={notify} reload={reload}
               onEditNet={(n) => setModal({ kind: 'net', net: n })} onDeleteNet={delNet} />
           : loaded && (
             <div class="page welcome">
               <h1>{tx('Witaj w simpleIPAM')}</h1>
+              {tenants.length > 0 && <a class="btn ghost small" href={`/api/export.xlsx?lang=${getLang()}`} title={tx('wszystkie sieci, arkusz na sieć')}><Icon name="download" size={14} />{tx('Eksport do Excela')}</a>}
               {!tenants.length ? (
                 <>
                   {isAdmin ? <>
@@ -484,7 +491,8 @@ export function App() {
       {modal?.kind === 'tokens' && <Tokens notify={notify} onClose={() => setModal(null)} />}
       {modal?.kind === 'pw' && <PasswordForm me={me} googleReady={googleReady} notify={notify} onClose={() => setModal(null)} />}
       {palette && <Palette sites={sites} go={go} onClose={() => setPalette(false)} />}
-      <Toasts items={toasts} />
+      <ConfirmHost />
+      <Toasts items={toasts} onDone={(id) => setToasts((l) => l.filter((x) => x.id !== id))} />
     </div>
   );
 }

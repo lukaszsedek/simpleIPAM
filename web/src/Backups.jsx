@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'preact/hooks';
 import { api } from './api.js';
-import { Icon, Field, Modal } from './ui.jsx';
+import { Icon, Field, Modal, ask } from './ui.jsx';
 import { t, locale } from './i18n.js';
 
 const bytes = (n) => (n > 1048576 ? `${(n / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1024))} kB`);
@@ -131,7 +131,7 @@ export function Backups({ notify }) {
     setForm(seed(await api.saveBackupConfig(form)));       // test exactly what is on screen
     return api.testRemote();
   }, (r) => notify(r.ok ? t('Połączenie działa — plik testowy został wysłany') : t('Błąd połączenia: {m}', { m: t(r.message) }), r.ok ? 'ok' : 'error'));
-  const del = (name) => confirm(t('Usunąć kopię {name}?', { name })) && act('del', () => api.delBackup(name), load);
+  const del = (name) => ask(t('Usunąć kopię {name}?', { name })).then((yes) => yes && act('del', () => api.delBackup(name), load));
   const [askPass, setAskPass] = useState(null);   // { fn(passphrase) } while the user is asked for an encryption passphrase
   const inspect = async (fn, pass) => {
     setBusy('inspect');
@@ -145,7 +145,7 @@ export function Backups({ notify }) {
   // Saves what is on screen first (Client ID/Secret), then starts the chosen sign-in flow.
   const connect = () => act('connect', async () => { setForm(seed(await api.saveBackupConfig(form))); return api.gdriveConnect(); }, (r) => { location.href = r.url; });
   const connectDevice = () => act('connect', async () => { setForm(seed(await api.saveBackupConfig(form))); return api.gdriveDeviceStart(); }, setDevice);
-  const disconnect = () => confirm(t('Odłączyć konto Google? Aplikacja straci dostęp do Dysku.')) && act('connect', api.gdriveDisconnect, async () => { await load(); setForm(seed((await api.backups()).config)); });
+  const disconnect = () => ask('Odłączyć konto Google? Aplikacja straci dostęp do Dysku.', { confirm: 'Odłącz' }).then((yes) => yes && act('connect', api.gdriveDisconnect, async () => { await load(); setForm(seed((await api.backups()).config)); }));
   const loadDrive = () => act('drive', api.gdriveFiles, (r) => setDrive(r.files));
   const readKey = async (e) => { const f = e.target.files[0]; if (f) set(['gcs', 'service_account_json'], await f.text()); e.target.value = ''; };
 

@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'preact/hooks';
+import { useEffect, useRef, useState } from 'preact/hooks';
 import { t } from './i18n.js';
 
 // Label tables hold Polish source text; reading them translates on the fly, so a language switch needs no rebuild.
@@ -107,11 +107,36 @@ export const Field = ({ label, hint, children, span }) => (
   </label>
 );
 
-export function Toasts({ items }) {
+// A toast may carry one action, e.g. { label: 'Cofnij', fn } for undoing the change it reports.
+export function Toasts({ items, onDone }) {
   return (
     <div class="toasts" aria-live="polite">
-      {items.map((i) => <div key={i.id} class={`toast ${i.kind}`}>{t(i.text)}</div>)}
+      {items.map((i) => (
+        <div key={i.id} class={`toast ${i.kind}`}>{t(i.text)}
+          {i.action && <button class="toast-action" onClick={() => { onDone?.(i.id); i.action.fn(); }}>{t(i.action.label)}</button>}</div>
+      ))}
     </div>
+  );
+}
+
+// Promise-based replacement for window.confirm: `await ask('Usunąć X?')` -> true / false. <ConfirmHost /> renders it once in the app.
+let askImpl = null;
+export const ask = (message, opts = {}) => new Promise((res) => (askImpl ? askImpl({ message, ...opts, res }) : res(window.confirm(t(message)))));
+export function ConfirmHost() {
+  const [q, setQ] = useState(null);
+  const ok = useRef();
+  useEffect(() => { askImpl = setQ; return () => { askImpl = null; }; }, []);
+  useEffect(() => { if (q) ok.current?.focus(); }, [q]);
+  if (!q) return null;
+  const done = (v) => { setQ(null); q.res(v); };
+  return (
+    <Modal title={q.title ?? 'Potwierdź'} onClose={() => done(false)}>
+      <p>{t(q.message)}</p>
+      <footer class="modal-actions">
+        <button class="btn ghost" onClick={() => done(false)}>{t('Anuluj')}</button>
+        <button ref={ok} class={`btn ${q.danger === false ? 'primary' : 'danger-solid'}`} onClick={() => done(true)}>{t(q.confirm ?? 'Usuń')}</button>
+      </footer>
+    </Modal>
   );
 }
 

@@ -362,3 +362,38 @@ test('first run: setup screen flag, first account is Admin, later sign-ups start
   assert.equal((await admin('GET', '/api/me')).user.pending_users, 0);
   assert.equal((await eve('GET', '/api/me')).user.global_role, 'reader');
 });
+
+test('xlsx export is a valid zip workbook; aggregated issues list spans networks', async () => {
+  const { admin, net } = await (async () => {
+    const api = createApi(openDb(':memory:'));
+    const c = client(api);
+    await c('POST', '/api/auth/register', { username: 'admin', password: 'password123' });
+    const t = await c('POST', '/api/tenants', { name: 'home' });
+    const site = await c('POST', `/api/tenants/${t.id}/sites`, { name: 'dom' });
+    const net = await c('POST', `/api/sites/${site.id}/networks`, { name: 'LAN', cidr: '10.0.0.0/24', dhcp_start: '10.0.0.100', dhcp_end: '10.0.0.150' });
+    return { admin: c, net };
+  })();
+  await admin('POST', `/api/networks/${net.id}/entries`, { ip: '10.0.0.5', fqdn: 'a.lan', alias: 'zażółć & <b>', status: 'used' });
+  await admin('POST', `/api/networks/${net.id}/entries`, { ip: '10.0.0.105', fqdn: 'dyn.lan', status: 'reserved' });
+  const out = await admin('GET', `/api/networks/${net.id}/export.xlsx`, {}, { lang: 'en' });
+  assert.match(out.contentType, /spreadsheetml/);
+  assert.equal(out.raw.readUInt32LE(0), 0x04034b50);                      // ZIP local header
+  assert.equal(out.raw.readUInt32LE(out.raw.length - 22), 0x06054b50);    // end of central directory
+  const { inflateRawSync } = await import('node:zlib');
+  const files = {};
+  for (let o = 0; out.raw.readUInt32LE(o) === 0x04034b50;) {
+    const csize = out.raw.readUInt32LE(o + 18), nlen = out.raw.readUInt16LE(o + 26);
+    const name = out.raw.toString('utf8', o + 30, o + 30 + nlen);
+    files[name] = inflateRawSync(out.raw.subarray(o + 30 + nlen, o + 30 + nlen + csize)).toString('utf8');
+    o += 30 + nlen + csize;
+  }
+  assert.ok(files['xl/workbook.xml'].includes('name="LAN"'));
+  const sheet = files['xl/worksheets/sheet1.xml'];
+  assert.ok(sheet.includes('zażółć &amp; &lt;b&gt;') && sheet.includes('DHCP reservation') && sheet.includes('Static') && sheet.includes('Valid until'));
+  assert.equal((await admin('GET', '/api/export.xlsx')).raw.readUInt32LE(0), 0x04034b50);
+  await admin('POST', `/api/networks/${net.id}/entries`, { ip: '10.0.0.30', fqdn: 'x.lan', status: 'reserved' });   // reserved outside the pool
+  const all = await admin('GET', '/api/issues');
+  assert.ok(all.total >= 1 && all.items.some((i) => i.network === 'LAN' && /poza pulą/.test(i.text)));
+  const stats = (await admin('GET', `/api/networks/${net.id}`)).stats;
+  assert.deepEqual([stats.static, stats.dhcp_reserved, stats.dynamic], [2, 1, 0]);
+});

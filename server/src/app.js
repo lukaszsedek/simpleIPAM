@@ -9,6 +9,7 @@ import * as gl from './google-login.js';
 import { isEncrypted, decrypt } from './backup-crypto.js';
 import { buildOpenApi, DOCS_HTML } from './openapi.js';
 import { readNeighbors } from './neighbors.js';
+import { buildXlsx } from './xlsx.js';
 import { lookup } from 'node:dns/promises';
 import * as unifi from './unifi.js';
 import { readFileSync, rmSync, existsSync, writeFileSync, copyFileSync, mkdirSync, readdirSync } from 'node:fs';
@@ -86,6 +87,63 @@ export function createApi(db, opts = {}) {
     return { name, cidr, vlan, gateway, dhcp_start, dhcp_end, dns: str(b.dns, 200), description: str(b.description), auto_scan: b.auto_scan ? 1 : 0 };
   }
 
+  // Consistency warnings of one network, computed on the fly (also feeds the sidebar counters and the all-networks list).
+  function issuesOf(net) {
+    const issues = [];
+    const entries = all('SELECT * FROM entries WHERE network_id=? ORDER BY ip_num', net.id);
+    const group = (rows, key) => {
+      const m = new Map();
+      for (const r of rows) if (r[key]) m.set(r[key], [...(m.get(r[key]) ?? []), r]);
+      return [...m].filter(([, v]) => v.length > 1);
+    };
+    for (const e of entries.filter(macAlert)) issues.push({ level: 'error', text: `${e.ip} (${e.fqdn || 'bez nazwy'}): skan widzi MAC ${e.seen_mac}, a wpis ma ${e.mac} — urządzenie wymienione albo adres przejęty?` });
+    for (const [mac, rows] of group(entries, 'mac')) {
+      issues.push({ level: 'error', text: `Duplikat MAC ${mac}: ${rows.map((r) => r.ip).join(', ')}` });
+    }
+    const siteEntries = all(`SELECT e.* FROM entries e JOIN networks n ON n.id=e.network_id WHERE n.site_id=? AND e.status!='free'`, net.site_id);
+    for (const [fqdn, rows] of group(siteEntries, 'fqdn')) {
+      if (rows.some((r) => r.network_id === net.id)) issues.push({ level: 'warn', text: `FQDN ${fqdn} występuje ${rows.length}× w lokalizacji: ${rows.map((r) => r.ip).join(', ')}` });
+    }
+    if (net.dhcp_start) {
+      const [a, b] = [ipToInt(net.dhcp_start), ipToInt(net.dhcp_end)];
+      // Inside the pool an entry is either a dynamic lease or a DHCP reservation; a plain "used" one cannot be told from a static
+      // address set by hand (a conflict), so it is only pointed out.
+      for (const e of entries) if (e.ip_num >= a && e.ip_num <= b && e.status === 'used') {
+        issues.push({ level: 'info', text: `${e.ip} (${e.fqdn || 'bez nazwy'}) leży w puli DHCP jako zajęty — dynamiczny przydział czy adres statyczny (konflikt)? Zrób rezerwację DHCP albo przenieś go poza pulę` });
+      }
+    }
+    // Outside the pool every address is static, so there is nothing to reserve.
+    const inPool = (e) => net.dhcp_start && e.ip_num >= ipToInt(net.dhcp_start) && e.ip_num <= ipToInt(net.dhcp_end);
+    for (const e of entries) if (e.status === 'reserved' && !inPool(e)) {
+      issues.push({ level: 'warn', text: `${e.ip} (${e.fqdn || 'bez nazwy'}) ma status „Zarezerwowany”, ale leży poza pulą DHCP — adres poza pulą jest statyczny, więc nie ma czego rezerwować (zmień status na „Statyczny”)` });
+    }
+    const today = new Date().toISOString().slice(0, 10);
+    const soon = new Date(Date.now() + 14 * 864e5).toISOString().slice(0, 10);
+    for (const e of entries) if (e.expires_at && e.status !== 'free' && e.expires_at <= soon) {
+      issues.push({ level: e.expires_at < today ? 'warn' : 'info', text: `${e.ip} (${e.alias || e.fqdn || 'bez nazwy'}): ${e.expires_at < today ? 'wpis wygasł' : 'wpis wygasa'} ${e.expires_at} — usuń go lub przedłuż ważność` });
+    }
+    // Growth forecast: addresses taken per day over the last 60 days (from the history of created entries) vs. what is left.
+    {
+      const c = parseCidr(net.cidr);
+      const cap = Math.max(0, c.last - c.first - 1);
+      const used = entries.filter((e) => e.status !== 'free').length;
+      const added = one(`SELECT COUNT(*) AS n FROM entry_history WHERE network_id=? AND action='create' AND ts >= datetime('now','-60 days')`, net.id).n;
+      const left = cap - used;
+      if (cap > 0 && left <= 0) issues.push({ level: 'error', text: 'Sieć jest zapełniona — brak wolnych adresów' });
+      else if (cap > 0 && used / cap >= 0.9) issues.push({ level: 'warn', text: `Sieć zajęta w ${Math.round(100 * used / cap)}% — zostało ${left} adresów` });
+      else if (added >= 3 && left > 0) {
+        const days = Math.round(left / (added / 60));
+        if (days <= 180) issues.push({ level: 'info', text: `Przy obecnym tempie (${added} nowych wpisów w 60 dni) wolne adresy skończą się za ok. ${days} dni` });
+      }
+    }
+    const me = parseCidr(net.cidr);
+    for (const o of all('SELECT * FROM networks WHERE site_id=? AND id!=?', net.site_id, net.id)) {
+      const c = parseCidr(o.cidr);
+      if (me.first <= c.last && c.first <= me.last) issues.push({ level: 'error', text: `Nakłada się z siecią „${o.name}” (${o.cidr}) w tej samej lokalizacji` });
+    }
+    return issues;
+  }
+
   function netStats(n) {
     const c = parseCidr(n.cidr);
     const [lo, hi] = usableRange(n.cidr);
@@ -93,9 +151,14 @@ export function createApi(db, opts = {}) {
     const dhcp = n.dhcp_start ? ipToInt(n.dhcp_end) - ipToInt(n.dhcp_start) + 1 : 0;
     const row = one(`SELECT COUNT(*) AS used,
         SUM(status='reserved') AS reserved FROM entries WHERE network_id=? AND status!='free'`, n.id);
+    // Outside the DHCP pool an address is static; inside it is a dynamic lease ("used") or a DHCP reservation.
+    const [ps, pe] = n.dhcp_start ? [ipToInt(n.dhcp_start), ipToInt(n.dhcp_end)] : [1, 0];
+    const split = one(`SELECT SUM(ip_num NOT BETWEEN ? AND ?) AS static_n, SUM(ip_num BETWEEN ? AND ? AND status='reserved') AS dhcp_reserved,
+        SUM(ip_num BETWEEN ? AND ? AND status='used') AS dynamic_n FROM entries WHERE network_id=? AND status!='free'`, ps, pe, ps, pe, ps, pe, n.id);
+    const issues = issuesOf(n).filter((i) => i.level !== 'info').length;
     const fresh = one('SELECT COUNT(*) AS n FROM discovered WHERE network_id=? AND dismissed=0', n.id).n;
     const alerts = all('SELECT mac, seen_mac, mac_ack FROM entries WHERE network_id=? AND seen_mac!=\'\'', n.id).filter(macAlert).length;
-    return { total, dhcp, used: row.used, reserved: row.reserved ?? 0, prefix: c.prefix, new_hosts: fresh, mac_alerts: alerts };
+    return { total, dhcp, used: row.used, reserved: row.reserved ?? 0, static: split.static_n ?? 0, dhcp_reserved: split.dhcp_reserved ?? 0, dynamic: split.dynamic_n ?? 0, issues, prefix: c.prefix, new_hosts: fresh, mac_alerts: alerts };
   }
 
   // ---------- entries ----------
@@ -429,6 +492,37 @@ export function createApi(db, opts = {}) {
 
   route('GET', '/api/audit', ({ user }) => (needGlobalAdmin(user), all('SELECT * FROM audit ORDER BY id DESC LIMIT 200')));
 
+  // Excel export. Headers and labels follow ?lang= (the browser's download link cannot carry the app's language otherwise).
+  const XL = {
+    pl: { head: ['IP', 'FQDN', 'Alias', 'MAC', 'Typ', 'Status', 'Tagi', 'Opis', 'Ważny do', 'Widziany', 'Podłączony do'], kind: { static: 'Statyczny', dynamic: 'Dynamiczny (DHCP)', reserved: 'Rezerwacja DHCP', free: 'Wolny' },
+      types: { server: 'Serwer', vm: 'VM', container: 'Kontener', router: 'Router', switch: 'Switch', ap: 'Access Point', iot: 'IoT', printer: 'Drukarka', pc: 'Komputer', phone: 'Telefon', nas: 'NAS', other: 'Inne' } },
+    en: { head: ['IP', 'FQDN', 'Alias', 'MAC', 'Type', 'Status', 'Tags', 'Description', 'Valid until', 'Last seen', 'Connected to'], kind: { static: 'Static', dynamic: 'Dynamic (DHCP)', reserved: 'DHCP reservation', free: 'Free' },
+      types: { server: 'Server', vm: 'VM', container: 'Container', router: 'Router', switch: 'Switch', ap: 'Access Point', iot: 'IoT', printer: 'Printer', pc: 'Computer', phone: 'Phone', nas: 'NAS', other: 'Other' } },
+    de: { head: ['IP', 'FQDN', 'Alias', 'MAC', 'Typ', 'Status', 'Tags', 'Beschreibung', 'Gültig bis', 'Zuletzt gesehen', 'Verbunden mit'], kind: { static: 'Statisch', dynamic: 'Dynamisch (DHCP)', reserved: 'DHCP-Reservierung', free: 'Frei' },
+      types: { server: 'Server', vm: 'VM', container: 'Container', router: 'Router', switch: 'Switch', ap: 'Access Point', iot: 'IoT', printer: 'Drucker', pc: 'Computer', phone: 'Telefon', nas: 'NAS', other: 'Sonstige' } },
+  };
+  const xlSheet = (net, lang) => {
+    const L = XL[lang] ?? XL.pl;
+    const [ps, pe] = net.dhcp_start ? [ipToInt(net.dhcp_start), ipToInt(net.dhcp_end)] : [1, 0];
+    const kind = (e) => (e.status === 'free' ? 'free' : e.ip_num >= ps && e.ip_num <= pe ? (e.status === 'reserved' ? 'reserved' : 'dynamic') : 'static');
+    const rows = all('SELECT * FROM entries WHERE network_id=? ORDER BY ip_num', net.id)
+      .map((e) => [e.ip, e.fqdn, e.alias, e.mac, L.types[e.type] ?? e.type, L.kind[kind(e)], e.tags, e.description, e.expires_at, e.last_seen ?? '', e.uplink]);
+    return { rows: [L.head, ...rows], widths: [16, 30, 24, 19, 14, 20, 20, 36, 12, 19, 22] };
+  };
+  const xlsxOut = (buf, name) => ({ raw: buf, contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', filename: name });
+  route('GET', '/api/networks/:id/export.xlsx', ({ params, query, user }) => {
+    const n = must(one('SELECT * FROM networks WHERE id=?', params.id), 'Sieć');
+    need(user, n.site_id, 'reader');
+    return xlsxOut(buildXlsx([{ name: n.name, ...xlSheet(n, query.lang) }]), `${n.name.replace(/\W+/g, '_')}.xlsx`);
+  });
+  route('GET', '/api/export.xlsx', ({ query, user }) => {
+    const roles = auth.rolesOf(user.id);
+    const sheets = all('SELECT n.*, s.name AS site_name, s.tenant_id FROM networks n JOIN sites s ON s.id=n.site_id ORDER BY s.name, n.vlan, n.cidr')
+      .filter((n) => RANK[auth.effective(roles, n.site_id, n.tenant_id)] >= RANK.reader)
+      .map((n) => ({ name: `${n.site_name} ${n.name}`, ...xlSheet(n, query.lang) }));
+    if (!sheets.length) throw new HttpError(404, 'Nie znaleziono');
+    return xlsxOut(buildXlsx(sheets), 'simpleipam.xlsx');
+  });
   route('GET', '/api/networks/:id/export.csv', ({ params, user }) => {
     const n = must(one('SELECT * FROM networks WHERE id=?', params.id), 'Sieć');
     need(user, n.site_id, 'reader');
@@ -538,59 +632,19 @@ export function createApi(db, opts = {}) {
   route('GET', '/api/networks/:id/issues', ({ params, user }) => {
     const net = must(one('SELECT * FROM networks WHERE id=?', params.id), 'Sieć');
     need(user, net.site_id, 'reader');
-    const issues = [];
-    const entries = all('SELECT * FROM entries WHERE network_id=? ORDER BY ip_num', net.id);
-    const group = (rows, key) => {
-      const m = new Map();
-      for (const r of rows) if (r[key]) m.set(r[key], [...(m.get(r[key]) ?? []), r]);
-      return [...m].filter(([, v]) => v.length > 1);
-    };
-    for (const e of entries.filter(macAlert)) issues.push({ level: 'error', text: `${e.ip} (${e.fqdn || 'bez nazwy'}): skan widzi MAC ${e.seen_mac}, a wpis ma ${e.mac} — urządzenie wymienione albo adres przejęty?` });
-    for (const [mac, rows] of group(entries, 'mac')) {
-      issues.push({ level: 'error', text: `Duplikat MAC ${mac}: ${rows.map((r) => r.ip).join(', ')}` });
+    return issuesOf(net);
+  });
+  // Everything that needs attention, across all networks the user can read.
+  route('GET', '/api/issues', ({ user }) => {
+    const roles = auth.rolesOf(user.id);
+    const items = [];
+    for (const n of all('SELECT n.*, s.name AS site_name, s.tenant_id, t.name AS tenant_name FROM networks n JOIN sites s ON s.id=n.site_id JOIN tenants t ON t.id=s.tenant_id ORDER BY t.name, s.name, n.vlan, n.cidr')) {
+      if (RANK[auth.effective(roles, n.site_id, n.tenant_id)] < RANK.reader) continue;
+      for (const i of issuesOf(n)) items.push({ network_id: n.id, network: n.name, cidr: n.cidr, site: n.site_name, tenant: n.tenant_name, ...i });
     }
-    const siteEntries = all(`SELECT e.* FROM entries e JOIN networks n ON n.id=e.network_id WHERE n.site_id=? AND e.status!='free'`, net.site_id);
-    for (const [fqdn, rows] of group(siteEntries, 'fqdn')) {
-      if (rows.some((r) => r.network_id === net.id)) issues.push({ level: 'warn', text: `FQDN ${fqdn} występuje ${rows.length}× w lokalizacji: ${rows.map((r) => r.ip).join(', ')}` });
-    }
-    if (net.dhcp_start) {
-      const [a, b] = [ipToInt(net.dhcp_start), ipToInt(net.dhcp_end)];
-      // Inside the pool an entry is either a dynamic lease or a DHCP reservation; a plain "used" one cannot be told from a static
-      // address set by hand (a conflict), so it is only pointed out.
-      for (const e of entries) if (e.ip_num >= a && e.ip_num <= b && e.status === 'used') {
-        issues.push({ level: 'info', text: `${e.ip} (${e.fqdn || 'bez nazwy'}) leży w puli DHCP jako zajęty — dynamiczny przydział czy adres statyczny (konflikt)? Zrób rezerwację DHCP albo przenieś go poza pulę` });
-      }
-    }
-    // Outside the pool every address is static, so there is nothing to reserve.
-    const inPool = (e) => net.dhcp_start && e.ip_num >= ipToInt(net.dhcp_start) && e.ip_num <= ipToInt(net.dhcp_end);
-    for (const e of entries) if (e.status === 'reserved' && !inPool(e)) {
-      issues.push({ level: 'warn', text: `${e.ip} (${e.fqdn || 'bez nazwy'}) ma status „Zarezerwowany”, ale leży poza pulą DHCP — adres poza pulą jest statyczny, więc nie ma czego rezerwować (zmień status na „Statyczny”)` });
-    }
-    const today = new Date().toISOString().slice(0, 10);
-    const soon = new Date(Date.now() + 14 * 864e5).toISOString().slice(0, 10);
-    for (const e of entries) if (e.expires_at && e.status !== 'free' && e.expires_at <= soon) {
-      issues.push({ level: e.expires_at < today ? 'warn' : 'info', text: `${e.ip} (${e.alias || e.fqdn || 'bez nazwy'}): ${e.expires_at < today ? 'wpis wygasł' : 'wpis wygasa'} ${e.expires_at} — usuń go lub przedłuż ważność` });
-    }
-    // Growth forecast: addresses taken per day over the last 60 days (from the history of created entries) vs. what is left.
-    {
-      const c = parseCidr(net.cidr);
-      const cap = Math.max(0, c.last - c.first - 1);
-      const used = entries.filter((e) => e.status !== 'free').length;
-      const added = one(`SELECT COUNT(*) AS n FROM entry_history WHERE network_id=? AND action='create' AND ts >= datetime('now','-60 days')`, net.id).n;
-      const left = cap - used;
-      if (cap > 0 && left <= 0) issues.push({ level: 'error', text: 'Sieć jest zapełniona — brak wolnych adresów' });
-      else if (cap > 0 && used / cap >= 0.9) issues.push({ level: 'warn', text: `Sieć zajęta w ${Math.round(100 * used / cap)}% — zostało ${left} adresów` });
-      else if (added >= 3 && left > 0) {
-        const days = Math.round(left / (added / 60));
-        if (days <= 180) issues.push({ level: 'info', text: `Przy obecnym tempie (${added} nowych wpisów w 60 dni) wolne adresy skończą się za ok. ${days} dni` });
-      }
-    }
-    const me = parseCidr(net.cidr);
-    for (const o of all('SELECT * FROM networks WHERE site_id=? AND id!=?', net.site_id, net.id)) {
-      const c = parseCidr(o.cidr);
-      if (me.first <= c.last && c.first <= me.last) issues.push({ level: 'error', text: `Nakłada się z siecią „${o.name}” (${o.cidr}) w tej samej lokalizacji` });
-    }
-    return issues;
+    const order = { error: 0, warn: 1, info: 2 };
+    items.sort((x, y) => order[x.level] - order[y.level]);
+    return { total: items.length, items };
   });
 
   // ---------- DNS / DHCP export ----------

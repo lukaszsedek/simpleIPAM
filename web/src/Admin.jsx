@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'preact/hooks';
 import { api } from './api.js';
-import { Icon, Field } from './ui.jsx';
+import { Icon, Field, ask } from './ui.jsx';
 import { Users } from './Users.jsx';
 import { Backups } from './Backups.jsx';
 import { t, locale } from './i18n.js';
@@ -126,9 +126,9 @@ function Unifi({ tenants, notify }) {
           <div class="form-actions">
             <button class="btn ghost" disabled={!ready || !!busy} onClick={() => act('diag', api.unifiDiagnose, setDiag)} title={t('Tylko odczyt — sprawdza, czy klucz dosięga klasycznego API, gdzie UniFi trzyma aliasy klientów')}>{busy === 'diag' ? t('Sprawdzam…') : t('Sprawdź zapis do UniFi')}</button>
             <button class="btn ghost" disabled={!ready || !!busy} onClick={() => act('pushdry', () => api.unifiPush(true), (r) => setPush({ ...r, kind: 'alias' }))} title={t('Pokazuje, które aliasy zostałyby zmienione w UniFi — niczego nie zapisuje')}>{busy === 'pushdry' ? t('Liczę…') : t('Podgląd wysyłki aliasów')}</button>
-            <button class="btn ghost" disabled={!ready || !!busy} onClick={() => confirm(t('Zapisać aliasy z IPAM w kontrolerze UniFi? Zmieni to nazwy klientów w UniFi.')) && act('push', () => api.unifiPush(false), (r) => { setPush({ ...r, kind: 'alias' }); api.unifi().then(setC); notify(r.ok ? t('Wysłano aliasów: {n}', { n: r.pushed }) : 'Wysyłka z błędami', r.ok ? 'ok' : 'error'); })}>{busy === 'push' ? t('Wysyłam…') : t('Wyślij aliasy do UniFi')}</button>
+            <button class="btn ghost" disabled={!ready || !!busy} onClick={() => ask('Zapisać aliasy z IPAM w kontrolerze UniFi? Zmieni to nazwy klientów w UniFi.', { confirm: 'Wyślij', danger: false, title: 'Wyślij aliasy do UniFi' }).then((yes) => yes && act('push', () => api.unifiPush(false), (r) => { setPush({ ...r, kind: 'alias' }); api.unifi().then(setC); notify(r.ok ? t('Wysłano aliasów: {n}', { n: r.pushed }) : 'Wysyłka z błędami', r.ok ? 'ok' : 'error'); }))}>{busy === 'push' ? t('Wysyłam…') : t('Wyślij aliasy do UniFi')}</button>
             <button class="btn ghost" disabled={!ready || !!busy} onClick={() => act('resdry', () => api.unifiReserve(true), (r) => setPush({ ...r, kind: 'reserve' }))} title={t('Pokazuje, które rezerwacje DHCP (wpisy o statusie „Zarezerwowany” z MAC) zostałyby ustawione w UniFi — niczego nie zapisuje')}>{busy === 'resdry' ? t('Liczę…') : t('Podgląd rezerwacji DHCP')}</button>
-            <button class="btn ghost" disabled={!ready || !!busy} onClick={() => confirm(t('Ustawić w UniFi rezerwacje DHCP (stałe adresy) dla zarezerwowanych wpisów z IPAM?')) && act('res', () => api.unifiReserve(false), (r) => { setPush({ ...r, kind: 'reserve' }); api.unifi().then(setC); notify(r.ok ? t('Wysłano rezerwacji: {n}', { n: r.pushed }) : 'Wysyłka z błędami', r.ok ? 'ok' : 'error'); })}>{busy === 'res' ? t('Wysyłam…') : t('Wyślij rezerwacje DHCP do UniFi')}</button>
+            <button class="btn ghost" disabled={!ready || !!busy} onClick={() => ask('Ustawić w UniFi rezerwacje DHCP (stałe adresy) dla wpisów „Rezerwacja DHCP” z IPAM?', { confirm: 'Wyślij', danger: false, title: 'Wyślij rezerwacje DHCP do UniFi' }).then((yes) => yes && act('res', () => api.unifiReserve(false), (r) => { setPush({ ...r, kind: 'reserve' }); api.unifi().then(setC); notify(r.ok ? t('Wysłano rezerwacji: {n}', { n: r.pushed }) : 'Wysyłka z błędami', r.ok ? 'ok' : 'error'); }))}>{busy === 'res' ? t('Wysyłam…') : t('Wyślij rezerwacje DHCP do UniFi')}</button>
             <button class="btn ghost" disabled={!ready || !!busy} onClick={() => sync(true)}>{busy === 'dry' ? t('Liczę…') : t('Podgląd')}</button>
             <button class="btn primary" disabled={!ready || !!busy} onClick={() => sync(false)}>{busy === 'sync' ? t('Synchronizuję…') : t('Synchronizuj teraz')}</button>
           </div>

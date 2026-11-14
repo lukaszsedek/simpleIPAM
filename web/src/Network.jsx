@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'preact/hooks';
 import { api } from './api.js';
-import { Icon, Modal, Field, TYPE_LABELS, STATUS_LABELS, RANK } from './ui.jsx';
-import { t } from './i18n.js';
+import { Icon, Modal, Field, TYPE_LABELS, STATUS_LABELS, RANK, ask } from './ui.jsx';
+import { t, getLang } from './i18n.js';
 
 const ipNum = (ip) => ip.split('.').reduce((a, o) => a * 256 + Number(o), 0);
 const intIp = (n) => [n >>> 24, (n >>> 16) & 255, (n >>> 8) & 255, n & 255].join('.');
@@ -16,14 +16,22 @@ const statusChoices = (net, ip, current) => {
   return [...base, ['free', 'Wolny']];
 };
 
-function EditableCell({ value, placeholder, onSave, mono, readOnly }) {
+// onSave resolves to true when the value was stored; the cell then flashes a tick so the edit never goes unnoticed.
+function EditableCell({ value, placeholder, onSave, mono, readOnly, className = '' }) {
   const [v, setV] = useState(value);
+  const [tick, setTick] = useState(false);
   useEffect(() => setV(value), [value]);
+  const save = async () => {
+    if (v === value) return;
+    if (await onSave(v)) { setTick(true); setTimeout(() => setTick(false), 1400); }
+  };
   return (
-    <input class={`cell-input ${mono ? 'mono' : ''}`} value={v} placeholder={placeholder}
-      readOnly={readOnly} onInput={(e) => setV(e.target.value)}
-      onBlur={() => v !== value && onSave(v)}
-      onKeyDown={(e) => { if (e.key === 'Enter') e.target.blur(); if (e.key === 'Escape') { setV(value); e.target.blur(); } }} />
+    <span class="cell-wrap">
+      <input class={`cell-input ${mono ? 'mono' : ''} ${className}`} value={v} placeholder={placeholder}
+        readOnly={readOnly} onInput={(e) => setV(e.target.value)} onBlur={save}
+        onKeyDown={(e) => { if (e.key === 'Enter') e.target.blur(); if (e.key === 'Escape') { setV(value); e.target.blur(); } }} />
+      {tick && <i class="saved-tick" role="status" aria-label={t('Zapisano')}><Icon name="check" size={12} /></i>}
+    </span>
   );
 }
 
@@ -205,10 +213,11 @@ function IpMap({ net, byNum, onPick }) {
   const cells = [];
   for (let n = lo; n <= hi; n++) {
     const e = byNum.get(n);
+    const pool = n >= ds && n <= de;
     let cls = 'free';
-    if (e) cls = e.status === 'reserved' ? 'reserved' : e.status === 'free' ? 'free' : 'used';
+    if (e && e.status !== 'free') cls = !pool ? 'used' : e.status === 'reserved' ? 'reserved' : 'dynamic';      // outside the pool everything is static
     else if (n === gw) cls = 'gw';
-    else if (n >= ds && n <= de) cls = 'dhcp';
+    else if (pool) cls = 'dhcp';
     const title = `${ipOf(n)}${e?.fqdn ? ` · ${e.fqdn}` : ''}${n === gw ? ` · ${t('brama')}` : ''}${!e && n >= ds && n <= de ? ' · DHCP' : ''}`;
     cells.push(<button key={n} class={`ipcell ${cls}`} title={title} aria-label={title} onClick={() => onPick(n, e)} />);
   }
@@ -216,7 +225,7 @@ function IpMap({ net, byNum, onPick }) {
     <>
       <div class="ipmap">{cells}</div>
       <div class="legend">
-        {[['used', 'Zajęty'], ['reserved', 'Zarezerwowany'], ['dhcp', 'DHCP'], ['gw', 'Brama'], ['free', 'Wolny']].map(([c, l]) => (
+        {[['used', 'Statyczny'], ['reserved', 'Rezerwacja DHCP'], ['dynamic', 'Dynamiczny'], ['dhcp', 'Pula DHCP'], ['gw', 'Brama'], ['free', 'Wolny']].map(([c, l]) => (
           <span><i class={`ipcell ${c}`} />{t(l)}</span>
         ))}
       </div>
@@ -236,6 +245,8 @@ export function Network({ id, notify, reload, onEditNet, onDeleteNet }) {
   const [found, setFound] = useState([]);
   const [sel, setSel] = useState(new Set());
   const [sort, setSort] = useState({ key: 'ip', dir: 1 });
+  const [cols, setCols] = useState(() => { try { return { mac: true, type: true, desc: true, ...JSON.parse(localStorage.cols) }; } catch { return { mac: true, type: true, desc: true }; } });
+  const setCol = (k, v) => { const n = { ...cols, [k]: v }; setCols(n); try { localStorage.cols = JSON.stringify(n); } catch { /* not persisted */ } };
 
   const load = () => {
     api.network(id).then(setNet).catch((e) => notify(e.message, 'error'));
@@ -250,7 +261,7 @@ export function Network({ id, notify, reload, onEditNet, onDeleteNet }) {
   const rows = useMemo(() => {
     const s = q.toLowerCase();
     const list = (net?.entries ?? []).filter((e) =>
-      (status === 'all' || e.status === status) &&
+      (status === 'all' || (status === 'static' ? !inPool(net, e.ip) : status === 'pool' ? inPool(net, e.ip) : e.status === status)) &&
       (!s || [e.ip, e.fqdn, e.alias, e.mac, e.tags, e.description, TYPE_LABELS[e.type]].some((v) => v?.toLowerCase().includes(s))));
     const val = (e) => (sort.key === 'ip' ? ipNum(e.ip) : (e[sort.key] ?? '').toString().toLowerCase());
     return list.sort((a, b) => (val(a) < val(b) ? -1 : val(a) > val(b) ? 1 : 0) * sort.dir);
@@ -262,17 +273,33 @@ export function Network({ id, notify, reload, onEditNet, onDeleteNet }) {
   const st = net.stats;
   const pct = Math.round((st.used / Math.max(1, st.total)) * 100);
 
+  // Stores a change and offers to undo it (the old values of just the touched fields are put back on top of the current entry).
   const patch = async (e, changes) => {
-    try { await api.saveEntry({ ...e, ...changes }); load(); reload(); }
-    catch (err) { notify(err.message, 'error'); load(); }
+    const before = Object.fromEntries(Object.keys(changes).map((k) => [k, e[k] ?? '']));
+    try {
+      await api.saveEntry({ ...e, ...changes }); load(); reload();
+      notify('Zapisano', 'ok', { label: 'Cofnij', fn: async () => {
+        try {
+          const cur = (await api.network(net.id)).entries.find((x) => x.id === e.id);
+          if (cur) await api.saveEntry({ ...cur, ...before });
+          notify('Cofnięto'); refresh();
+        } catch (err) { notify(err.message, 'error'); }
+      } });
+      return true;
+    } catch (err) { notify(err.message, 'error'); load(); return false; }
+  };
+  // Deleting can be undone by creating the entries again (their history starts over).
+  const restore = async (list) => {
+    try { for (const e of list) await api.saveEntry({ ...e, id: undefined, network_id: net.id }); notify('Wpisy przywrócone'); refresh(); }
+    catch (err) { notify(err.message, 'error'); refresh(); }
   };
   const macAct = async (e, action) => {
     try { await api.macAction(e.id, action); notify(action === 'accept' ? t('MAC {ip} zaktualizowany', { ip: e.ip }) : 'Zignorowano ten adres MAC'); refresh(); }
     catch (err) { notify(err.message, 'error'); }
   };
   const remove = async (e) => {
-    if (!confirm(t('Usunąć {name}?', { name: `${e.ip}${e.fqdn ? ` (${e.fqdn})` : ''}` }))) return;
-    await api.delEntry(e.id); notify('Usunięto wpis'); refresh();
+    if (!await ask(t('Usunąć {name}?', { name: `${e.ip}${e.fqdn ? ` (${e.fqdn})` : ''}` }), { title: 'Usuń wpis' })) return;
+    await api.delEntry(e.id); notify('Usunięto wpis', 'ok', { label: 'Cofnij', fn: () => restore([e]) }); refresh();
   };
   const importFile = async (ev) => {
     const file = ev.target.files[0]; ev.target.value = '';
@@ -321,9 +348,12 @@ export function Network({ id, notify, reload, onEditNet, onDeleteNet }) {
       <section class="stats">
         <div class="card stat"><span>{t('Wykorzystanie')}</span><b>{pct}%</b>
           <div class="bar"><i style={{ width: `${pct}%` }} /></div></div>
-        <div class="card stat"><span>{t('Zajęte')}</span><b>{st.used - st.reserved}</b></div>
-        <div class="card stat"><span>{t('Zarezerwowane')}</span><b>{st.reserved}</b></div>
-        <div class="card stat"><span>{t('Pula DHCP')}</span><b>{st.dhcp}</b></div>
+        <div class="card stat"><span>{t('Statyczne')}</span><b>{st.static}</b></div>
+        {st.dhcp > 0 && <>
+          <div class="card stat"><span>{t('Rezerwacje DHCP')}</span><b>{st.dhcp_reserved}</b></div>
+          <div class="card stat"><span>{t('Dynamiczne (DHCP)')}</span><b>{st.dynamic}</b></div>
+          <div class="card stat"><span>{t('Pula DHCP')}</span><b>{st.dhcp}</b></div>
+        </>}
         <div class="card stat"><span>{t('Dostępne łącznie')}</span><b>{st.total}</b></div>
       </section>
 
@@ -362,7 +392,7 @@ export function Network({ id, notify, reload, onEditNet, onDeleteNet }) {
           <div class="search-box"><Icon name="search" size={16} />
             <input placeholder={t('Filtruj wpisy…')} value={q} onInput={(e) => setQ(e.target.value)} /></div>
           <div class="segmented" role="tablist">
-            {[['all', 'Wszystkie'], ['used', 'Zajęte'], ['reserved', 'Rezerwacje']].map(([k, l]) => (
+            {[['all', 'Wszystkie'], ['static', 'Statyczne'], ['pool', 'Pula DHCP'], ['reserved', 'Rezerwacje']].map(([k, l]) => (
               <button class={status === k ? 'on' : ''} onClick={() => setStatus(k)}>{t(l)}</button>
             ))}
           </div>
@@ -371,8 +401,16 @@ export function Network({ id, notify, reload, onEditNet, onDeleteNet }) {
           {canEdit && <button class="btn ghost" onClick={() => setScan(true)}><Icon name="radar" />{t('Skanuj')}</button>}
           <button class="btn ghost" onClick={() => setDns(true)} title={t('Porównuje FQDN wpisów z tym, co odpowiada DNS')}><Icon name="search" />DNS</button>
           <details class="menu">
+            <summary class="btn ghost"><Icon name="menu" />{t('Kolumny')}</summary>
+            <div class="menu-list cols-menu">
+              {[['mac', 'MAC'], ['type', 'Typ'], ['desc', 'Opis']].map(([k, l]) => <label class="toggle"><input type="checkbox" checked={cols[k]} onChange={(e) => setCol(k, e.target.checked)} /> {t(l)}</label>)}
+            </div>
+          </details>
+          <details class="menu">
             <summary class="btn ghost"><Icon name="download" />{t('Eksport')}</summary>
             <div class="menu-list">
+              <a href={`/api/networks/${net.id}/export.xlsx?lang=${getLang()}`}>{t('Excel (.xlsx)')}<small>{t('dla tej sieci')}</small></a>
+              <a href={`/api/export.xlsx?lang=${getLang()}`}>{t('Eksport do Excela')}<small>{t('wszystkie sieci, arkusz na sieć')}</small></a>
               <a href={`/api/networks/${net.id}/export.csv`}>CSV<small>{t('wszystkie pola, do importu')}</small></a>
               <a href={`/api/networks/${net.id}/export/hosts`}>hosts<small>/etc/hosts</small></a>
               <a href={`/api/networks/${net.id}/export/dnsmasq`}>dnsmasq / Pi-hole<small>host-record + dhcp-host</small></a>
@@ -386,23 +424,28 @@ export function Network({ id, notify, reload, onEditNet, onDeleteNet }) {
 
         {sel.size > 0 && <BulkBar count={sel.size} onClear={() => setSel(new Set())}
           onApply={(changes) => bulk({ action: 'update', changes }, 'Zmieniono')}
-          onDelete={() => confirm(t('Usunąć {n} wpisów?', { n: sel.size })) && bulk({ action: 'delete' }, 'Usunięto')} />}
+          onDelete={async () => {
+            if (!await ask(t('Usunąć {n} wpisów?', { n: sel.size }), { title: 'Usuń wpisy' })) return;
+            const gone = net.entries.filter((e) => sel.has(e.id));
+            try { const r = await api.bulk(net.id, { ids: [...sel], action: 'delete' }); notify(t('Usunięto wpisów: {n}', { n: r.affected }), 'ok', { label: 'Cofnij', fn: () => restore(gone) }); refresh(); }
+            catch (err) { notify(err.message, 'error'); }
+          }} />}
         <div class="table-wrap">
           <table>
             <thead><tr>
               {canEdit && <th class="check"><input type="checkbox" checked={allOn} aria-label={t('Zaznacz wszystkie')}
                 onChange={() => setSel(allOn ? new Set() : new Set(rows.map((e) => e.id)))} /></th>}
-              {th('ip', 'IP')}{th('fqdn', 'FQDN')}{th('alias', 'Alias')}{th('mac', 'MAC')}{th('type', 'Typ')}{th('status', 'Status')}{th('description', 'Opis')}{th('last_seen', 'Widziany')}<th />
+              {th('ip', 'IP')}{th('fqdn', 'Nazwa / alias')}{cols.mac && th('mac', 'MAC')}{cols.type && th('type', 'Typ')}{th('status', 'Status')}{cols.desc && th('description', 'Opis')}<th />
             </tr></thead>
             <tbody>
               {rows.map((e) => (
                 <tr key={e.id} class={sel.has(e.id) ? 'selected' : ''}>
                   {canEdit && <td class="check"><input type="checkbox" checked={sel.has(e.id)} onChange={() => toggle(e.id)} aria-label={t('Zaznacz {ip}', { ip: e.ip })} /></td>}
-                  <td class="mono ip">{e.ip}</td>
-                  <td><EditableCell readOnly={!canEdit} value={e.fqdn} placeholder="—" onSave={(v) => patch(e, { fqdn: v })} />
+                  <td class="mono ip">{e.ip}<div class="muted small-text nowrap" title={e.last_seen ?? ''}>{e.last_seen ? ago(e.last_seen) : ''}</div></td>
+                  <td class="name-cell"><EditableCell readOnly={!canEdit} value={e.fqdn} placeholder="FQDN" onSave={(v) => patch(e, { fqdn: v })} />
+                    <EditableCell readOnly={!canEdit} className="alias" value={e.alias} placeholder={t('Alias')} onSave={(v) => patch(e, { alias: v })} />
                     {e.uplink && <div class="uplink muted small-text" title={t('Podłączony do (UniFi)')}>↳ {e.uplink}</div>}</td>
-                  <td><EditableCell readOnly={!canEdit} value={e.alias} placeholder="—" onSave={(v) => patch(e, { alias: v })} /></td>
-                  <td class="mono muted">{e.mac || '—'}
+                  {cols.mac && <td class="mono muted">{e.mac || '—'}
                     {e.mac_alert && (
                       <div class="mac-alert" role="alert">
                         <span title={t('Skan widzi inny adres MAC niż zapisany')}>⚠ {t('widziany:')} {e.seen_mac}</span>
@@ -413,16 +456,15 @@ export function Network({ id, notify, reload, onEditNet, onDeleteNet }) {
                     {e.mac_suggest && (
                       <div class="mac-suggest">{t('wykryty:')} {e.seen_mac}{canEdit && <button class="link-btn" onClick={() => macAct(e, 'accept')}>{t('użyj')}</button>}</div>
                     )}
-                  </td>
-                  <td><span class="chip">{TYPE_LABELS[e.type]}</span></td>
+                  </td>}
+                  {cols.type && <td><span class="chip">{TYPE_LABELS[e.type]}</span></td>}
                   <td>
                     <select class={`status-select ${e.status}`} disabled={!canEdit} value={e.status} onChange={(ev) => patch(e, { status: ev.target.value })}>
                       {statusChoices(net, e.ip, e.status).map(([k, l]) => <option value={k}>{t(l)}</option>)}
                     </select>
                   </td>
-                  <td><EditableCell readOnly={!canEdit} value={e.description} placeholder="—" onSave={(v) => patch(e, { description: v })} />
-                    {e.tags && <div class="tags">{e.tags.split(',').map((tg) => <span class="tag">#{tg}</span>)}</div>}</td>
-                  <td class="muted small-text nowrap" title={e.last_seen ?? ''}>{ago(e.last_seen)}</td>
+                  {cols.desc && <td><EditableCell readOnly={!canEdit} value={e.description} placeholder="—" onSave={(v) => patch(e, { description: v })} />
+                    {e.tags && <div class="tags">{e.tags.split(',').map((tg) => <button class="tag" onClick={() => setQ(tg)} title={t('Filtruj wpisy…')}>#{tg}</button>)}</div>}</td>}
                   <td class="row-actions">
                     <button class="icon-btn" onClick={() => setHist(e)} aria-label={t('Historia {ip}', { ip: e.ip })} title={t('Historia zmian')}><Icon name="history" size={16} /></button>
                     {canEdit && <><button class="icon-btn" onClick={() => setForm(e)} aria-label={t('Edytuj')}><Icon name="edit" size={16} /></button>

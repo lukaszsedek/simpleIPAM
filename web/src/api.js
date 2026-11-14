@@ -76,6 +76,7 @@ export const api = {
   unifiPush: (dry_run) => req('POST', '/api/admin/unifi/push', { dry_run }),
   unifiReserve: (dry_run) => req('POST', '/api/admin/unifi/reserve', { dry_run }),
   dnsCheck: (id) => req('POST', `/api/networks/${id}/dns-check`, {}),
+  allIssues: () => req('GET', '/api/issues'),
   unifiDiagnose: () => req('POST', '/api/admin/unifi/diagnose', {}),
   unifiSync: (dry_run) => req('POST', '/api/admin/unifi/sync', { dry_run }),
   testRemote: () => req('POST', '/api/admin/backups/test-remote', {}),

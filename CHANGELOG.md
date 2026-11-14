@@ -5,6 +5,15 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+### Added
+- **Export to Excel** (`.xlsx`): one network from the Export menu, or every network you can read as one workbook (a sheet per network, also on the home page). Labels follow the interface language; written without any library.
+- **"To review" page** in the sidebar: every warning from every network in one list (errors first, filterable), with a counter in the sidebar and on each network.
+- Undo: saving an inline edit and deleting entries (one or many) show a toast with "Undo"; deleting asks in a proper dialog instead of the browser's confirm box. A cell shows a tick when its edit was saved.
+- Network tiles and the address map now split Static / DHCP reservation / Dynamic / DHCP pool; the entry filter has Static, DHCP pool and Reservations.
+
+### Changed
+- The entries table is more compact: FQDN and alias share one cell (alias below), "last seen" sits under the IP, and MAC / Type / Description can be hidden from the "Columns" menu. Tags are clickable filters.
+
 ## [0.9.0] - 2026-11-14
 
 ### Changed

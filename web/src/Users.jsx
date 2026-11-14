@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'preact/hooks';
 import { api } from './api.js';
-import { Icon, Modal, Field, ROLE_LABELS } from './ui.jsx';
+import { Icon, Modal, Field, ROLE_LABELS, ask } from './ui.jsx';
 import { t } from './i18n.js';
 
 const RoleSelect = ({ value, onChange, allowNone = true, ...rest }) => (
@@ -97,7 +97,7 @@ export function Users({ tenants, me, notify, onChanged }) {
                     <td class="row-actions always">
                       <button class="icon-btn" title={t('Zmień hasło')} aria-label={t('Zmień hasło')} onClick={() => setPwFor(u)}><Icon name="key" size={16} /></button>
                       {u.id !== me.id && <button class="icon-btn danger" aria-label={t('Usuń użytkownika')}
-                        onClick={() => confirm(t('Usunąć użytkownika {name}?', { name: u.username })) && act(() => api.delUser(u.id), 'Usunięto użytkownika')}><Icon name="trash" size={16} /></button>}
+                        onClick={() => ask(t('Usunąć użytkownika {name}?', { name: u.username })).then((yes) => yes && act(() => api.delUser(u.id), 'Usunięto użytkownika'))}><Icon name="trash" size={16} /></button>}
                     </td>
                   </tr>
                 );
