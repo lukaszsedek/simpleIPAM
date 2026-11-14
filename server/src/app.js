@@ -555,9 +555,16 @@ export function createApi(db, opts = {}) {
     }
     if (net.dhcp_start) {
       const [a, b] = [ipToInt(net.dhcp_start), ipToInt(net.dhcp_end)];
-      for (const e of entries) if (e.ip_num >= a && e.ip_num <= b && e.status !== 'free') {
-        issues.push({ level: 'info', text: `${e.ip} (${e.fqdn || 'bez nazwy'}) leży w puli DHCP — rozważ rezerwację DHCP lub zawężenie puli` });
+      // Inside the pool an entry is either a dynamic lease or a DHCP reservation; a plain "used" one cannot be told from a static
+      // address set by hand (a conflict), so it is only pointed out.
+      for (const e of entries) if (e.ip_num >= a && e.ip_num <= b && e.status === 'used') {
+        issues.push({ level: 'info', text: `${e.ip} (${e.fqdn || 'bez nazwy'}) leży w puli DHCP jako zajęty — dynamiczny przydział czy adres statyczny (konflikt)? Zrób rezerwację DHCP albo przenieś go poza pulę` });
       }
+    }
+    // Outside the pool every address is static, so there is nothing to reserve.
+    const inPool = (e) => net.dhcp_start && e.ip_num >= ipToInt(net.dhcp_start) && e.ip_num <= ipToInt(net.dhcp_end);
+    for (const e of entries) if (e.status === 'reserved' && !inPool(e)) {
+      issues.push({ level: 'warn', text: `${e.ip} (${e.fqdn || 'bez nazwy'}) ma status „Zarezerwowany”, ale leży poza pulą DHCP — adres poza pulą jest statyczny, więc nie ma czego rezerwować (zmień status na „Statyczny”)` });
     }
     const today = new Date().toISOString().slice(0, 10);
     const soon = new Date(Date.now() + 14 * 864e5).toISOString().slice(0, 10);
@@ -1113,7 +1120,7 @@ export function createApi(db, opts = {}) {
   // rules as the alias push: known clients only, nothing is created, capped per run, previewable.
   async function unifiReserveSite(c, siteRow, { dry = false } = {}) {
     const out = { site: siteRow.name, planned: [], pushed: 0, skipped: [], errors: [] };
-    const cands = all(`SELECT e.*, n.cidr AS net_cidr FROM entries e JOIN networks n ON n.id=e.network_id
+    const cands = all(`SELECT e.*, n.cidr AS net_cidr, n.dhcp_start, n.dhcp_end FROM entries e JOIN networks n ON n.id=e.network_id
       WHERE n.site_id=? AND e.status='reserved' AND e.mac!='' ORDER BY e.ip_num`, siteRow.id);
     if (!cands.length) return out;
     try {
@@ -1121,6 +1128,7 @@ export function createApi(db, opts = {}) {
       const known = await unifi.knownClients(c, siteRow.unifi_host, siteName, uDeps());
       const nets = await unifi.classicNetworks(c, siteRow.unifi_host, siteName, uDeps());
       for (const e of cands) {
+        if (!(e.dhcp_start && e.ip_num >= ipToInt(e.dhcp_start) && e.ip_num <= ipToInt(e.dhcp_end))) { out.skipped.push({ ip: e.ip, reason: 'adres poza pulą DHCP jest statyczny — nie ma czego rezerwować' }); continue; }
         const k = known.get(e.mac.toLowerCase());
         if (!k) { out.skipped.push({ ip: e.ip, reason: 'UniFi nie zna tego klienta (brak go na liście znanych urządzeń)' }); continue; }
         const net = nets.find((n) => n.cidr === normalizeCidr(e.net_cidr));

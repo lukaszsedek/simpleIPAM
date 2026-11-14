@@ -5,6 +5,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+### Changed
+- Entry status now follows the DHCP pool: outside the pool an address is **Static** (there is nothing to reserve), inside it is **Dynamic (DHCP)** or a **DHCP reservation**. The status dropdowns show only the choices that make sense for the address.
+- "To review": a reservation inside the pool is no longer flagged; a plain "used" entry in the pool is pointed out as dynamic-or-conflict, and a "Reserved" entry outside the pool is flagged as pointless.
+- DHCP reservations to UniFi only cover reserved entries inside the pool; static ones are skipped.
+
 ## [0.8.2] - 2026-11-14
 
 ### Changed

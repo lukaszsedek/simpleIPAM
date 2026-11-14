@@ -310,25 +310,29 @@ test('network devices become entries (typed) and clients show which AP/switch th
   assert.equal(r.ok, true);
 });
 
-test('DHCP reservations: preview, write fixed IPs for reserved entries, skip unknown clients and networks', async () => {
+test('DHCP reservations: only pool addresses, preview, write fixed IPs, skip static, unknown clients and networks', async () => {
   const ctx = await setup(); const { call, f } = ctx;
   await connect(ctx);
-  f.clients = [{ id: 'c1', name: 'nas', type: 'WIRED', ipAddress: '192.168.1.10', macAddress: 'aa:bb:cc:00:00:10' },
-    { id: 'c2', name: 'tv', type: 'WIRED', ipAddress: '192.168.1.11', macAddress: 'aa:bb:cc:00:00:11' }];
-  f.known = [{ _id: 'u1', mac: 'aa:bb:cc:00:00:10', name: 'nas' }, { _id: 'u2', mac: 'aa:bb:cc:00:00:11', name: 'tv', use_fixedip: true, fixed_ip: '192.168.1.11', network_id: 'n1' }];
+  await call('PUT', '/api/admin/unifi', { import_dhcp: true });
+  f.clients = [{ id: 'c1', name: 'nas', type: 'WIRED', ipAddress: '192.168.1.110', macAddress: 'aa:bb:cc:00:00:10' },
+    { id: 'c2', name: 'tv', type: 'WIRED', ipAddress: '192.168.1.111', macAddress: 'aa:bb:cc:00:00:11' },
+    { id: 'c3', name: 'printer', type: 'WIRED', ipAddress: '192.168.1.20', macAddress: 'aa:bb:cc:00:00:12' }];       // static, outside the 100-199 pool
+  f.known = [{ _id: 'u1', mac: 'aa:bb:cc:00:00:10', name: 'nas' }, { _id: 'u2', mac: 'aa:bb:cc:00:00:11', name: 'tv', use_fixedip: true, fixed_ip: '192.168.1.111', network_id: 'n1' },
+    { _id: 'u3', mac: 'aa:bb:cc:00:00:12', name: 'printer' }];
   await assert.rejects(call('POST', '/api/admin/unifi/reserve'), /synchronizację/);
   await call('POST', '/api/admin/unifi/sync');
   const net = (await call('GET', '/api/overview'))[0].sites[0].networks[0];
   const es = (await call('GET', `/api/networks/${net.id}`)).entries;
-  for (const e of es.filter((x) => x.ip.endsWith('.10') || x.ip.endsWith('.11'))) await call('PUT', `/api/entries/${e.id}`, { ...e, status: 'reserved' });
+  for (const e of es) await call('PUT', `/api/entries/${e.id}`, { ...e, status: 'reserved' });
   const dry = await call('POST', '/api/admin/unifi/reserve', { dry_run: true });
-  assert.deepEqual(dry.results[0].planned.map((p) => [p.ip, p.from, p.to]), [['192.168.1.10', '', '192.168.1.10']]);   // tv already reserved
+  assert.deepEqual(dry.results[0].planned.map((p) => [p.ip, p.from, p.to]), [['192.168.1.110', '', '192.168.1.110']]);   // tv already reserved
+  assert.match(dry.results[0].skipped[0].reason, /poza pulą/);                                                              // printer is static
   assert.equal(f.puts.length, 0);
   const r = await call('POST', '/api/admin/unifi/reserve');
   assert.deepEqual([r.pushed, f.puts.length], [1, 1]);
-  assert.deepEqual([f.puts[0].id, f.puts[0].use_fixedip, f.puts[0].fixed_ip, f.puts[0].network_id], ['u1', true, '192.168.1.10', 'n1']);
+  assert.deepEqual([f.puts[0].id, f.puts[0].use_fixedip, f.puts[0].fixed_ip, f.puts[0].network_id], ['u1', true, '192.168.1.110', 'n1']);
   assert.equal((await call('POST', '/api/admin/unifi/reserve')).pushed, 0);                  // idempotent
   f.networkconf = [{ _id: 'n9', ip_subnet: '10.9.9.1/24' }];                                 // UniFi has no such network
   f.known[0].use_fixedip = false;
-  assert.match((await call('POST', '/api/admin/unifi/reserve', { dry_run: true })).results[0].skipped[0].reason, /sieci o tym CIDR/);
+  assert.ok((await call('POST', '/api/admin/unifi/reserve', { dry_run: true })).results[0].skipped.some((s) => /sieci o tym CIDR/.test(s.reason)));
 });

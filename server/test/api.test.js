@@ -217,6 +217,11 @@ test('issues detect duplicates, DHCP overlap and overlapping networks', async ()
   assert.match(text, /FQDN a\.lan występuje 2×/);
   assert.match(text, /10\.0\.0\.120.*puli DHCP/);
   assert.match(text, /Nakłada się/);
+  const r = await admin('POST', `/api/networks/${net.id}/entries`, { ip: '10.0.0.121', fqdn: 'res.lan', status: 'reserved' });   // reserved in the pool: fine
+  const r2 = await admin('POST', `/api/networks/${net.id}/entries`, { ip: '10.0.0.30', fqdn: 'stat.lan', status: 'reserved' });   // reserved outside the pool: pointless
+  const text2 = (await admin('GET', `/api/networks/${net.id}/issues`)).map((i) => i.text).join('\n');
+  assert.doesNotMatch(text2, /10\.0\.0\.121/);
+  assert.match(text2, /10\.0\.0\.30.*poza pulą DHCP/);
 });
 
 test('dns exports, backup, registration switch', async () => {

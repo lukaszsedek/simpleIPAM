@@ -7,6 +7,15 @@ const ipNum = (ip) => ip.split('.').reduce((a, o) => a * 256 + Number(o), 0);
 const intIp = (n) => [n >>> 24, (n >>> 16) & 255, (n >>> 8) & 255, n & 255].join('.');
 const ipOf = (n) => intIp(n);
 
+const inPool = (net, ip) => !!net.dhcp_start && ipNum(ip) >= ipNum(net.dhcp_start) && ipNum(ip) <= ipNum(net.dhcp_end);
+// Outside the DHCP pool an address is static by definition (nothing to reserve); inside it is a dynamic lease or a DHCP reservation.
+const statusChoices = (net, ip, current) => {
+  const pool = inPool(net, ip ?? '');
+  const base = pool ? [['used', 'Dynamiczny (DHCP)'], ['reserved', 'Rezerwacja DHCP']] : [['used', 'Statyczny']];
+  if (!pool && current === 'reserved') base.push(['reserved', 'Zarezerwowany ⚠ (poza pulą)']);      // legacy value, flagged under "To review"
+  return [...base, ['free', 'Wolny']];
+};
+
 function EditableCell({ value, placeholder, onSave, mono, readOnly }) {
   const [v, setV] = useState(value);
   useEffect(() => setV(value), [value]);
@@ -51,7 +60,7 @@ function EntryForm({ net, entry, onClose, onSaved, notify }) {
         </Field>
         <Field label="Status">
           <select value={f.status} onChange={set('status')}>
-            {Object.entries(STATUS_LABELS).map(([k, l]) => <option value={k}>{l}</option>)}
+            {statusChoices(net, f.ip, f.status).map(([k, l]) => <option value={k}>{t(l)}</option>)}
           </select>
         </Field>
         <Field label="Tagi" hint="rozdzielone przecinkami"><input value={f.tags ?? ''} onInput={set('tags')} placeholder={t('iot, kuchnia')} /></Field>
@@ -408,7 +417,7 @@ export function Network({ id, notify, reload, onEditNet, onDeleteNet }) {
                   <td><span class="chip">{TYPE_LABELS[e.type]}</span></td>
                   <td>
                     <select class={`status-select ${e.status}`} disabled={!canEdit} value={e.status} onChange={(ev) => patch(e, { status: ev.target.value })}>
-                      {Object.entries(STATUS_LABELS).map(([k, l]) => <option value={k}>{l}</option>)}
+                      {statusChoices(net, e.ip, e.status).map(([k, l]) => <option value={k}>{t(l)}</option>)}
                     </select>
                   </td>
                   <td><EditableCell readOnly={!canEdit} value={e.description} placeholder="—" onSave={(v) => patch(e, { description: v })} />
