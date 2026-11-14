@@ -63,6 +63,7 @@ const proxy = (host, p) => `/v1/connector/consoles/${encodeURIComponent(host)}/p
 export const listSites = async (cfg, host, deps) => (await listAll(cfg, proxy(host, '/sites'), deps)).filter((s) => s?.id);
 export const listClients = (cfg, host, site, deps) => listAll(cfg, proxy(host, `/sites/${site}/clients`), deps);
 export const listNetworks = (cfg, host, site, deps) => listAll(cfg, proxy(host, `/sites/${site}/networks`), deps);
+export const listDevices = (cfg, host, site, deps) => listAll(cfg, proxy(host, `/sites/${site}/devices`), deps);
 export const networkDetails = (cfg, host, site, id, deps) => get(cfg, proxy(host, `/sites/${site}/networks/${id}`), deps);
 
 // First value found under `key` anywhere in a JSON tree.
@@ -94,11 +95,24 @@ export function toNetwork(n) {
   };
 }
 
-// A UniFi client -> { ip, mac, name, wifi } or null without a usable IPv4 address.
+// A UniFi client -> { ip, mac, name, wifi, uplink } or null without a usable IPv4 address (uplink = id of the AP/switch).
 export function toClient(c) {
   const ip = String(c?.ipAddress ?? '');
   if (ipToInt(ip) === null) return null;
-  return { ip, mac: String(c.macAddress ?? ''), name: String(c.name ?? c.hostname ?? '').trim(), wifi: /wireless|wifi/i.test(String(c.type ?? '')) };
+  return { ip, mac: String(c.macAddress ?? ''), name: String(c.name ?? c.hostname ?? '').trim(), wifi: /wireless|wifi/i.test(String(c.type ?? '')), uplink: String(c.uplinkDeviceId ?? '') };
+}
+
+// A UniFi network device (gateway, switch, access point) -> entry-shaped data, or null without an IPv4 address.
+export function toDevice(d) {
+  const ip = String(d?.ipAddress ?? '');
+  if (ipToInt(ip) === null) return null;
+  const model = String(d.model ?? '');
+  const features = (Array.isArray(d.features) ? d.features : Object.keys(d.features ?? {})).map((f) => String(f).toLowerCase());
+  const type = /^(udm|ucg|uxg|udr|usg|ugw)/i.test(model) || features.includes('gateway') ? 'router'
+    : features.includes('accesspoint') || /^(u6|u7|uap|e7|ap)/i.test(model) && !features.includes('switching') ? 'ap'
+    : features.includes('switching') || /^(usw|us-|usl|switch)/i.test(model) ? 'switch' : 'other';
+  const fw = d.firmwareVersion ? ` · fw ${d.firmwareVersion}` : '';
+  return { id: String(d.id ?? ''), ip, mac: String(d.macAddress ?? ''), name: String(d.name ?? model).trim(), type, description: `${model}${fw}`.trim() };
 }
 
 // Hostname-like names become the FQDN; anything else ("Łukasz's iPhone") stays a description.
@@ -133,10 +147,20 @@ export async function classicSiteName(cfg, host, site, deps) {
 export async function knownClients(cfg, host, siteName, deps) {
   const map = new Map();
   for (const c of rows(await classic(cfg, host, 'GET', `/s/${encodeURIComponent(siteName)}/rest/user`, undefined, deps))) {
-    if (c?.mac && c._id) map.set(String(c.mac).toLowerCase(), { id: c._id, name: String(c.name ?? '') });
+    if (c?.mac && c._id) map.set(String(c.mac).toLowerCase(), { id: c._id, name: String(c.name ?? ''), fixed: !!c.use_fixedip, fixed_ip: String(c.fixed_ip ?? ''), network_id: String(c.network_id ?? '') });
   }
   return map;
 }
 
 export const setClientName = (cfg, host, siteName, id, name, deps) =>
   classic(cfg, host, 'PUT', `/s/${encodeURIComponent(siteName)}/rest/user/${encodeURIComponent(id)}`, { name }, deps);
+
+// Classic network configs: { id, cidr } for matching a simpleIPAM network to UniFi's network_id.
+export async function classicNetworks(cfg, host, siteName, deps) {
+  return rows(await classic(cfg, host, 'GET', `/s/${encodeURIComponent(siteName)}/rest/networkconf`, undefined, deps))
+    .map((n) => ({ id: n._id, cidr: normalizeCidr(String(n.ip_subnet ?? '')) })).filter((n) => n.id && n.cidr);
+}
+
+// DHCP reservation ("fixed IP") for a known client.
+export const setFixedIp = (cfg, host, siteName, id, ip, networkId, deps) =>
+  classic(cfg, host, 'PUT', `/s/${encodeURIComponent(siteName)}/rest/user/${encodeURIComponent(id)}`, { use_fixedip: true, fixed_ip: ip, network_id: networkId }, deps);

@@ -1126,7 +1126,9 @@ export function createApi(db, opts = {}) {
         nets.push({ raw, n });
       }
       const clients = (await unifi.listClients(c, con.id, site.id, uDeps())).map(unifi.toClient).filter(Boolean);
-      out.push({ site, nets, clients });
+      // network devices are optional: an older console without the endpoint must not break the import
+      const rawDevices = await unifi.listDevices(c, con.id, site.id, uDeps()).catch(() => []);
+      out.push({ site, nets, clients, devices: rawDevices.map(unifi.toDevice).filter(Boolean), deviceNames: new Map(rawDevices.filter((d) => d?.id).map((d) => [String(d.id), String(d.name ?? d.model ?? '')])) });
     }
     return { con, sites: out };
   }
@@ -1134,7 +1136,7 @@ export function createApi(db, opts = {}) {
   function unifiApply(c, fetched, dry) {
     const who = 'unifi';
     const sum = { console: fetched.con.name, sites: 0, networks: { created: 0, updated: 0, skipped: 0 }, entries: { created: 0, updated: 0, pooled: 0, skipped: 0 }, aliases: { updated: 0, conflicts: 0 }, errors: [] };
-    for (const { site, nets, clients } of fetched.sites) {
+    for (const { site, nets, clients: rawClients, devices, deviceNames } of fetched.sites) {
       sum.sites++;
       const siteName = (fetched.sites.length > 1 ? `${fetched.con.name} / ${site.name}` : fetched.con.name).slice(0, 80);
       let ipamSite = one('SELECT * FROM sites WHERE tenant_id=? AND name=?', c.tenant_id, siteName);
@@ -1163,6 +1165,8 @@ export function createApi(db, opts = {}) {
           log('create', 'network', `${n.name} (${n.cidr}) z UniFi`);
         }
       }
+      // devices first so a gateway/switch/AP is never mistaken for a pool client
+      const clients = [...devices.map((d) => ({ ...d, device: true, wifi: false })), ...rawClients.map((cl) => ({ ...cl, uplinkName: deviceNames.get(cl.uplink) ?? '' }))];
       for (const cl of clients) {
         const net = known.find((k) => inCidr(cl.ip, k.cidr));
         if (!net) { sum.entries.skipped++; continue; }
@@ -1181,10 +1185,11 @@ export function createApi(db, opts = {}) {
           if (!dry) {
             run("UPDATE entries SET last_seen=datetime('now') WHERE id=?", e.id);
             observeMac(e, mac, who);
+            if ((cl.uplinkName ?? '') !== e.uplink && !cl.device) run('UPDATE entries SET uplink=? WHERE id=?', cl.uplinkName ?? '', e.id);
             if (unifiChanged) run('UPDATE entries SET unifi_name=? WHERE id=?', name, e.id);
             if (takes) { run("UPDATE entries SET alias=?, updated_at=datetime('now') WHERE id=?", name, e.id); hist(net.id, e.id, e.ip, 'update', { alias: [e.alias, name] }, who); }
           }
-        } else if (inPool(net, cl.ip) && !c.import_dhcp) {
+        } else if (!cl.device && inPool(net, cl.ip) && !c.import_dhcp) {
           sum.entries.pooled++;
           if (!dry && net.id) run(`INSERT INTO discovered (network_id, ip, mac, name) VALUES (?,?,?,?)
             ON CONFLICT(network_id, ip) DO UPDATE SET last_seen=datetime('now'), name=excluded.name, mac=CASE WHEN excluded.mac!='' THEN excluded.mac ELSE mac END`, net.id, cl.ip, mac, cl.name.slice(0, 100));
@@ -1194,9 +1199,9 @@ export function createApi(db, opts = {}) {
           const alias = cl.name.slice(0, 100);
           const fqdn = unifi.hostnameOf(cl.name);
           const dupFqdn = fqdn && one('SELECT 1 FROM entries e JOIN networks n ON n.id=e.network_id WHERE n.site_id=? AND e.fqdn=?', ipamSite.id, fqdn);
-          const entry = { ip: cl.ip, fqdn: dupFqdn ? '' : fqdn, alias, mac, type: 'other', status: 'used', tags: ['unifi', cl.wifi ? 'wifi' : 'lan'].join(','), description: '' };
-          const r = run(`INSERT INTO entries (network_id, ip, ip_num, fqdn, alias, unifi_name, mac, type, status, tags, description, last_seen) VALUES (?,?,?,?,?,?,?,?,?,?,?,datetime('now'))`,
-            net.id, entry.ip, ipToInt(entry.ip), entry.fqdn, alias, alias, mac, entry.type, entry.status, entry.tags, entry.description);
+          const entry = { ip: cl.ip, fqdn: dupFqdn ? '' : fqdn, alias, mac, type: cl.type ?? 'other', status: 'used', tags: ['unifi', cl.device ? 'device' : cl.wifi ? 'wifi' : 'lan'].join(','), description: cl.description ?? '' };
+          const r = run(`INSERT INTO entries (network_id, ip, ip_num, fqdn, alias, unifi_name, mac, type, status, tags, description, uplink, last_seen) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,datetime('now'))`,
+            net.id, entry.ip, ipToInt(entry.ip), entry.fqdn, alias, alias, mac, entry.type, entry.status, entry.tags, entry.description, cl.uplinkName ?? '');
           hist(net.id, Number(r.lastInsertRowid), entry.ip, 'create', snapshot({ ...entry, mac }, 'new'), who);
         }
       }

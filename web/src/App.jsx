@@ -235,6 +235,15 @@ export function App() {
   const [modal, setModal] = useState(null);
   const [palette, setPalette] = useState(false);
   const [nav, setNav] = useState(false);
+  const [menu, setMenu] = useState(false);   // profile dropdown
+  const menuRef = useRef(null);
+  useEffect(() => {
+    if (!menu) return undefined;
+    const off = (e) => { if (!menuRef.current?.contains(e.target)) setMenu(false); };
+    const esc = (e) => { if (e.key === 'Escape') setMenu(false); };
+    addEventListener('mousedown', off); addEventListener('keydown', esc);
+    return () => { removeEventListener('mousedown', off); removeEventListener('keydown', esc); };
+  }, [menu]);
   const [toasts, setToasts] = useState([]);
   const [rev, setRev] = useState(0);
   const [theme, setTheme] = useState(() => { try { return localStorage.theme; } catch { return null; } });
@@ -357,24 +366,35 @@ export function App() {
         </nav>
         <div class="side-foot">
           {isAdmin && <button class="btn ghost block" onClick={() => setModal({ kind: 'tenant' })}><Icon name="plus" />Tenant</button>}
-          {isAdmin && (
-            <a class={`btn ghost block ${adminTab ? 'on' : ''}`} href="#/admin"><Icon name="settings" />Administracja{me.pending_users > 0 && <b class="badge" title="Użytkownicy bez uprawnień">{me.pending_users}</b>}</a>
-          )}
-          <div class="user-box">
-            <span class="name" title={me.username}>{me.username}</span>
-            <span class={`role-badge ${me.global_role}`}>{ROLE_LABELS[me.global_role]}</span>
-            <div class="user-actions">
-            <button class="icon-btn" onClick={() => setModal({ kind: 'tokens' })} aria-label="Tokeny API" title="Tokeny API"><Icon name="code" size={16} /></button>
-            <button class="icon-btn" onClick={() => setModal({ kind: 'pw' })} aria-label="Zmień hasło" title="Zmień hasło"><Icon name="key" size={16} /></button>
-            <button class="icon-btn" onClick={toggleTheme} aria-label="Zmień motyw"><Icon name={document.documentElement.dataset.theme === 'dark' ? 'sun' : 'moon'} size={16} /></button>
-            <button class="icon-btn" onClick={logout} aria-label="Wyloguj" title="Wyloguj"><Icon name="logout" size={16} /></button>
-            </div>
-          </div>
           {version && <a class="version" href="https://github.com/lukaszsedek/simpleIPAM/releases" target="_blank" rel="noopener" title="Historia wersji">simpleIPAM v{version.replace(/^v/, '')}</a>}
         </div>
       </aside>
 
       <main>
+        <header class="topbar">
+          {isAdmin && (
+            <a class={`btn ghost small admin-link ${adminTab ? 'on' : ''}`} href="#/admin" title="Administracja">
+              <Icon name="settings" size={16} /><span>Administracja</span>{me.pending_users > 0 && <b class="badge" title="Użytkownicy bez uprawnień">{me.pending_users}</b>}
+            </a>
+          )}
+          <div class="profile" ref={menuRef}>
+            <button class="profile-btn" aria-haspopup="menu" aria-expanded={menu} onClick={() => setMenu(!menu)}>
+              <span class="avatar" aria-hidden="true">{me.username.slice(0, 1).toUpperCase()}</span>
+              <span class="who"><b>{me.username}</b><small>{ROLE_LABELS[me.global_role]}</small></span>
+              <Icon name="chevron" size={14} />
+            </button>
+            {menu && (
+              <div class="menu" role="menu">
+                <div class="menu-head"><b>{me.username}</b><span class={`role-badge ${me.global_role}`}>{ROLE_LABELS[me.global_role]}</span></div>
+                <button role="menuitem" onClick={() => { setMenu(false); setModal({ kind: 'tokens' }); }}><Icon name="code" size={16} />Tokeny API</button>
+                <button role="menuitem" onClick={() => { setMenu(false); setModal({ kind: 'pw' }); }}><Icon name="key" size={16} />{me.has_password ? 'Zmień hasło' : 'Hasło i konto Google'}</button>
+                <button role="menuitem" onClick={toggleTheme}><Icon name={document.documentElement.dataset.theme === 'dark' ? 'sun' : 'moon'} size={16} />Zmień motyw</button>
+                <hr />
+                <button role="menuitem" class="danger" onClick={() => { setMenu(false); logout(); }}><Icon name="logout" size={16} />Wyloguj</button>
+              </div>
+            )}
+          </div>
+        </header>
         <button class="menu-btn icon-btn" onClick={() => setNav(!nav)} aria-label="Menu"><Icon name="menu" /></button>
         {adminTab ? <Admin tab={adminTab} tenants={tenants} me={me} notify={notify} onUsersChanged={refreshMe} />
           : netId ? <Network key={`${netId}-${rev}`} id={netId} notify={notify} reload={reload}

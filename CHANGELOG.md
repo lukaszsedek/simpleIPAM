@@ -5,6 +5,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+### Added
+- UniFi import now also brings network devices (gateways, switches, access points) as typed entries (model and firmware in the description), and shows which AP/switch each client is attached to ("↳ AP Salon" under the FQDN).
+
+### Changed
+- Administration link and the profile menu (API tokens, password, theme, log out) moved from the sidebar to the top-right corner.
+
 ## [0.5.1] - 2026-11-14
 
 ### Changed

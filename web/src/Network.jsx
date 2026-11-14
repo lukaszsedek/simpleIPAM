@@ -359,7 +359,8 @@ export function Network({ id, notify, reload, onEditNet, onDeleteNet }) {
                 <tr key={e.id} class={sel.has(e.id) ? 'selected' : ''}>
                   {canEdit && <td class="check"><input type="checkbox" checked={sel.has(e.id)} onChange={() => toggle(e.id)} aria-label={`Zaznacz ${e.ip}`} /></td>}
                   <td class="mono ip">{e.ip}</td>
-                  <td><EditableCell readOnly={!canEdit} value={e.fqdn} placeholder="—" onSave={(v) => patch(e, { fqdn: v })} /></td>
+                  <td><EditableCell readOnly={!canEdit} value={e.fqdn} placeholder="—" onSave={(v) => patch(e, { fqdn: v })} />
+                    {e.uplink && <div class="uplink muted small-text" title="Podłączony do (UniFi)">↳ {e.uplink}</div>}</td>
                   <td><EditableCell readOnly={!canEdit} value={e.alias} placeholder="—" onSave={(v) => patch(e, { alias: v })} /></td>
                   <td class="mono muted">{e.mac || '—'}
                     {e.mac_alert && (

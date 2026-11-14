@@ -2,11 +2,11 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { openDb } from '../src/db.js';
 import { createApi } from '../src/app.js';
-import { toNetwork, toClient, hostnameOf, findKey } from '../src/unifi.js';
+import { toNetwork, toClient, toDevice, hostnameOf, findKey } from '../src/unifi.js';
 
 // Fake api.ui.com: one console with one site, a gateway-managed LAN with a DHCP pool, and a few clients.
 function fakeUbiquiti() {
-  const f = { calls: [], clients: [], keyOk: true, known: [], puts: [], classicDown: false };
+  const f = { calls: [], clients: [], keyOk: true, known: [], puts: [], classicDown: false, devices: [], devicesDown: false };
   const page = (data) => ({ ok: true, status: 200, json: async () => ({ data, offset: 0, limit: 200, count: data.length, totalCount: data.length }), text: async () => '' });
   const net = (over = {}) => ({ id: 'n1', name: 'LAN', vlanId: 1, enabled: true, management: 'GATEWAY',
     ipv4Configuration: { hostIpAddress: '192.168.1.1', prefixLength: 24, dhcpConfiguration: { mode: 'SERVER', ipAddressRange: { start: '192.168.1.100', stop: '192.168.1.199' }, dnsServerIpAddressesOverride: ['1.1.1.1', '9.9.9.9'] } }, ...over });
@@ -30,6 +30,7 @@ function fakeUbiquiti() {
     if (u.pathname === `${base}/sites`) return page([{ id: 's1', name: 'Default', internalReference: 'default' }]);
     if (u.pathname === `${base}/sites/s1/networks`) return page(f.networks);
     if (u.pathname === `${base}/sites/s1/clients`) return page(f.clients);
+    if (u.pathname === `${base}/sites/s1/devices`) return f.devicesDown ? { ok: false, status: 404, text: async () => '', json: async () => ({}) } : page(f.devices);
     return { ok: false, status: 404, text: async () => '', json: async () => ({}) };
   };
   return f;
@@ -57,7 +58,10 @@ test('parsers: tolerant network/client mapping and hostname detection', () => {
   assert.equal(toNetwork({ id: 'y', management: 'UNMANAGED' }), null);
   assert.equal(toNetwork({ id: 'z', vlanId: 5, hostIpAddress: '10.0.0.1', prefixLength: 24 }).cidr, '10.0.0.0/24');   // flat shape works too
   assert.equal(toNetwork({ id: 'o', ipv4Configuration: { hostIpAddress: '10.0.0.1', prefixLength: 24, dhcpConfiguration: { ipAddressRange: { start: '172.16.0.1', stop: '172.16.0.9' } } } }).dhcp_start, '');   // range outside the subnet is dropped
-  assert.deepEqual(toClient({ ipAddress: '10.0.0.5', macAddress: 'AA:BB:CC:00:00:01', name: 'cam', type: 'WIRELESS' }), { ip: '10.0.0.5', mac: 'AA:BB:CC:00:00:01', name: 'cam', wifi: true });
+  assert.deepEqual(toClient({ ipAddress: '10.0.0.5', macAddress: 'AA:BB:CC:00:00:01', name: 'cam', type: 'WIRELESS' }), { ip: '10.0.0.5', mac: 'AA:BB:CC:00:00:01', name: 'cam', wifi: true, uplink: '' });
+  assert.equal(toClient({ ipAddress: '10.0.0.6', uplinkDeviceId: 'dev1' }).uplink, 'dev1');
+  assert.deepEqual(['UCG-Fiber', 'USW-Pro-24', 'U6-Pro', 'weird'].map((m) => toDevice({ model: m, ipAddress: '10.0.0.2' }).type), ['router', 'switch', 'ap', 'other']);
+  assert.equal(toDevice({ model: 'x', macAddress: 'aa' }), null);
   assert.equal(toClient({ macAddress: 'aa' }), null);
   assert.equal(hostnameOf('Nas-01'), 'nas-01');
   assert.equal(hostnameOf("Łukasz's iPhone"), '');
@@ -277,4 +281,30 @@ test('alias push is careful: unknown clients are skipped, emptied alias never cl
   assert.equal(bad.ok, false);
   assert.match(bad.results[0].errors[0], /401\/403/);
   assert.equal((await call('GET', '/api/admin/unifi')).write_verified, false);                // a failed write never verifies
+});
+
+test('network devices become entries (typed) and clients show which AP/switch they hang on; missing devices endpoint is harmless', async () => {
+  const ctx = await setup(); const { call, f } = ctx;
+  await connect(ctx);
+  f.devices = [
+    { id: 'd1', name: 'UCG-Fiber', model: 'UCG-Fiber', macAddress: 'aa:bb:cc:01:00:01', ipAddress: '192.168.1.1', firmwareVersion: '4.1.0', features: ['gateway'] },
+    { id: 'd2', name: 'AP Salon', model: 'U6-Pro', macAddress: 'aa:bb:cc:01:00:02', ipAddress: '192.168.1.2', firmwareVersion: '6.7.0' },
+    { id: 'd3', name: 'Switch Rack', model: 'USW-Pro-24', macAddress: 'aa:bb:cc:01:00:03', ipAddress: '192.168.1.3' },
+  ];
+  f.clients = [{ id: 'c1', name: 'nas', type: 'WIRED', ipAddress: '192.168.1.10', macAddress: 'aa:bb:cc:00:00:10', uplinkDeviceId: 'd3' },
+    { id: 'c2', name: 'phone', type: 'WIRELESS', ipAddress: '192.168.1.150', macAddress: 'aa:bb:cc:00:00:15', uplinkDeviceId: 'd2' }];   // pool client
+  await call('POST', '/api/admin/unifi/sync');
+  const net = (await call('GET', '/api/overview'))[0].sites[0].networks.find((n) => n.cidr === '192.168.1.0/24');
+  const es = (await call('GET', `/api/networks/${net.id}`)).entries;
+  assert.deepEqual(es.map((e) => [e.ip, e.type, e.alias, e.tags]), [['192.168.1.1', 'router', 'UCG-Fiber', 'unifi,device'], ['192.168.1.2', 'ap', 'AP Salon', 'unifi,device'], ['192.168.1.3', 'switch', 'Switch Rack', 'unifi,device'], ['192.168.1.10', 'other', 'nas', 'unifi,lan']]);
+  assert.equal(es[1].description, 'U6-Pro · fw 6.7.0');
+  assert.equal(es[3].uplink, 'Switch Rack');
+  assert.equal((await call('GET', `/api/networks/${net.id}/discovered`))[0].ip, '192.168.1.150');   // pool client still waits as a new device
+
+  f.clients[0].uplinkDeviceId = 'd2';                                                                // moved to the AP
+  await call('POST', '/api/admin/unifi/sync');
+  assert.equal((await call('GET', `/api/networks/${net.id}`)).entries.find((e) => e.ip.endsWith('.10')).uplink, 'AP Salon');
+  f.devicesDown = true;                                                                              // console without the endpoint
+  const r = await call('POST', '/api/admin/unifi/sync');
+  assert.equal(r.ok, true);
 });
