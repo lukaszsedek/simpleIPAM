@@ -5,6 +5,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+### Changed
+- Sidebar network entries use two lines (name with ellipsis + VLAN pill, then CIDR and usage), so long names no longer collide with the VLAN and address.
+
 ## [0.4.1] - 2026-11-14
 
 ### Added

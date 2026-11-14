@@ -333,9 +333,13 @@ export function App() {
                       {s.networks.map((n) => {
                         const pct = Math.round((n.stats.used / Math.max(1, n.stats.total)) * 100);
                         return (
-                          <a href={`#/n/${n.id}`} class={String(n.id) === netId ? 'on' : ''}>
-                            <span class="net-name">{n.name}{n.vlan && <em>v{n.vlan}</em>}{n.stats.new_hosts > 0 && <b class="badge" title="Nowe urządzenia">{n.stats.new_hosts}</b>}</span>
-                            <span class="mono sub">{n.cidr}</span>
+                          <a href={`#/n/${n.id}`} class={String(n.id) === netId ? 'on' : ''} title={`${n.name} · ${n.cidr}${n.vlan ? ` · VLAN ${n.vlan}` : ''}`}>
+                            <span class="net-top">
+                              <span class="net-name">{n.name}</span>
+                              {n.stats.new_hosts > 0 && <b class="badge" title="Nowe urządzenia">{n.stats.new_hosts}</b>}
+                              {n.vlan && <span class="vlan-pill">VLAN {n.vlan}</span>}
+                            </span>
+                            <span class="net-bottom"><span class="mono">{n.cidr}</span><span>{pct}%</span></span>
                             <span class="mini-bar"><i style={{ width: `${pct}%` }} /></span>
                           </a>
                         );

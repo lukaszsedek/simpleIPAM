@@ -46,13 +46,16 @@ nav { flex: 1; overflow-y: auto; margin: 0 -6px; padding: 0 6px; }
 .site-btn:hover { background: var(--surface-2); }
 .site-btn small { margin-left: auto; color: var(--muted); font-weight: 500; }
 .nets { margin: 2px 0 6px 14px; padding-left: 10px; border-left: 1px solid var(--border); display: flex; flex-direction: column; gap: 2px; }
-.nets a { display: grid; grid-template-columns: 1fr auto; gap: 0 8px; padding: 7px 10px; border-radius: 9px; }
+.nets a { display: flex; flex-direction: column; gap: 2px; padding: 8px 10px; border-radius: 9px; min-width: 0; }
 .nets a:hover { background: var(--surface-2); }
 .nets a.on { background: var(--accent-soft); color: var(--accent); }
-.net-name { font-weight: 500; }
-.net-name em { font-style: normal; font-size: 11px; margin-left: 6px; color: var(--muted); }
-.nets .sub { font-size: 11px; color: var(--muted); text-align: right; align-self: center; }
-.mini-bar { grid-column: 1 / -1; height: 3px; border-radius: 3px; background: var(--border); margin-top: 5px; overflow: hidden; }
+.net-top { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.net-name { font-weight: 500; flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vlan-pill { flex: none; font-size: 10px; font-weight: 600; letter-spacing: .02em; padding: 1px 6px; border-radius: 999px; color: var(--muted); background: var(--surface-2); border: 1px solid var(--border); }
+.nets a.on .vlan-pill { color: var(--accent); background: transparent; border-color: color-mix(in srgb, var(--accent) 35%, transparent); }
+.net-bottom { display: flex; justify-content: space-between; gap: 8px; font-size: 11px; color: var(--muted); }
+.nets a.on .net-bottom { color: color-mix(in srgb, var(--accent) 80%, var(--muted)); }
+.mini-bar { height: 3px; border-radius: 3px; background: var(--border); margin-top: 5px; overflow: hidden; }
 .mini-bar i, .bar i { display: block; height: 100%; background: linear-gradient(90deg, var(--accent), #a78bfa); border-radius: inherit; }
 .add-net { display: flex; align-items: center; gap: 6px; border: 0; background: none; color: var(--muted); padding: 6px 10px; border-radius: 8px; text-align: left; }
 .add-net:hover { color: var(--accent); background: var(--surface-2); }
