@@ -5,6 +5,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-14
+
 ### Added
 - UniFi import through Ubiquiti Site Manager (one API key, `api.ui.com` cloud connector): per console a site with its networks (VLAN, gateway, DHCP range, DNS), static clients as entries, DHCP-pool clients as "new devices"; preview (dry run), manual or hourly sync; UniFi-reported MACs feed MAC-change detection. Existing data is never overwritten.
 
