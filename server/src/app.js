@@ -9,6 +9,7 @@ import * as gl from './google-login.js';
 import { isEncrypted, decrypt } from './backup-crypto.js';
 import { buildOpenApi, DOCS_HTML } from './openapi.js';
 import { readNeighbors } from './neighbors.js';
+import * as unifi from './unifi.js';
 import { readFileSync, rmSync, existsSync, writeFileSync, copyFileSync, mkdirSync, readdirSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import { summarize, validateAndPrepare } from './restore.js';
@@ -124,6 +125,14 @@ export function createApi(db, opts = {}) {
   const macAlert = (e) => !!(e.mac && e.seen_mac && e.seen_mac !== e.mac && e.seen_mac !== e.mac_ack);
   const withFlags = (e) => ({ ...e, mac_alert: macAlert(e), mac_suggest: !e.mac && !!e.seen_mac });
 
+  // A source (scan, UniFi) saw `mac` at this entry's address. A different MAC than the recorded one leaves a trail
+  // (once per distinct MAC) and, until accepted or ignored, shows up as a warning on the entry.
+  function observeMac(e, mac, who) {
+    if (!mac || mac === e.seen_mac) return;
+    run('UPDATE entries SET seen_mac=? WHERE id=?', mac, e.id);
+    if (e.mac && mac !== e.mac && mac !== e.mac_ack) hist(e.network_id, e.id, e.ip, 'mac_seen', { mac: [e.mac, mac] }, who);
+  }
+
   function nextFree(net, from = null) {
     const [lo, hi] = usableRange(net.cidr);
     const taken = new Set(all('SELECT ip_num FROM entries WHERE network_id=?', net.id).map((r) => r.ip_num));
@@ -165,11 +174,7 @@ export function createApi(db, opts = {}) {
       const e = entries.get(i);
       if (e) {
         run("UPDATE entries SET last_seen=datetime('now') WHERE id=?", e.id);
-        if (mac && mac !== e.seen_mac) {
-          run('UPDATE entries SET seen_mac=? WHERE id=?', mac, e.id);
-          // a known device answering with a different MAC than the recorded one: worth a trail
-          if (e.mac && mac !== e.mac && mac !== e.mac_ack) hist(net.id, e.id, ip, 'mac_seen', { mac: [e.mac, mac] }, 'skan');
-        }
+        observeMac(e, mac, 'skan');
       } else {
         run(`INSERT INTO discovered (network_id, ip, mac) VALUES (?,?,?)
           ON CONFLICT(network_id, ip) DO UPDATE SET last_seen=datetime('now'), mac=CASE WHEN excluded.mac!='' THEN excluded.mac ELSE mac END`, net.id, ip, mac);
@@ -975,8 +980,164 @@ export function createApi(db, opts = {}) {
     throw new HttpError(404, 'Nie znaleziono');
   }
 
+
+  // ---------- UniFi (Site Manager) import ----------
+  // One-way: UniFi -> simpleIPAM. Networks are created (or have blanks filled) per console/site, static clients become entries,
+  // clients inside the DHCP pool land in "discovered" (or become entries when import_dhcp is on), and the MACs UniFi reports
+  // feed the same MAC-change detection as scans.
+  const UNIFI_DEFAULTS = { api_key: '', consoles: [], tenant_id: null, import_dhcp: false, auto_sync: false };
+  const unifiCfg = () => {
+    let c = {};
+    try { c = JSON.parse(one("SELECT value FROM settings WHERE key='unifi'")?.value ?? '{}'); } catch { /* unset */ }
+    return { ...UNIFI_DEFAULTS, ...c };
+  };
+  const saveSetting = (key, v) => run('INSERT INTO settings (key, value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value', key, JSON.stringify(v));
+  const unifiLast = () => { try { return JSON.parse(one("SELECT value FROM settings WHERE key='unifi_last'")?.value ?? 'null'); } catch { return null; } };
+  const unifiPublic = (c = unifiCfg()) => ({ ...c, api_key: undefined, key_set: !!c.api_key, last: unifiLast() });
+  const uDeps = () => ({ fetch: opts.fetch });
+  const uFail = (e) => { if (e instanceof unifi.UnifiError) throw bad(e.message); throw e; };
+  const inPool = (n, ip) => !!n.dhcp_start && ipToInt(ip) >= ipToInt(n.dhcp_start) && ipToInt(ip) <= ipToInt(n.dhcp_end);
+
+  route('GET', '/api/admin/unifi', ({ user }) => (needGlobalAdmin(user), unifiPublic()));
+  route('PUT', '/api/admin/unifi', ({ body, user, ctx }) => {
+    needGlobalAdmin(user); sessionOnly(ctx);
+    const c = unifiCfg();
+    if (str(body.api_key, 300)) { c.api_key = str(body.api_key, 300); c.consoles = []; }       // a new key means a new account: rediscover
+    if (body.tenant_id !== undefined) {
+      if (body.tenant_id !== null) must(one('SELECT id FROM tenants WHERE id=?', body.tenant_id), 'Tenant');
+      c.tenant_id = body.tenant_id === null ? null : Number(body.tenant_id);
+    }
+    if (body.import_dhcp !== undefined) c.import_dhcp = !!body.import_dhcp;
+    if (body.auto_sync !== undefined) c.auto_sync = !!body.auto_sync;
+    if (Array.isArray(body.consoles)) {
+      const on = new Set(body.consoles.filter((x) => x.enabled).map((x) => String(x.id)));
+      c.consoles = c.consoles.map((x) => ({ ...x, enabled: on.has(x.id) }));
+    }
+    saveSetting('unifi', c);
+    log('update', 'settings', 'integracja UniFi');
+    return unifiPublic(c);
+  });
+  route('POST', '/api/admin/unifi/discover', async ({ user, ctx }) => {
+    needGlobalAdmin(user); sessionOnly(ctx);
+    const c = unifiCfg();
+    if (!c.api_key) throw bad('Najpierw zapisz klucz API');
+    try {
+      const hosts = await unifi.listHosts(c, uDeps());
+      const was = new Map(c.consoles.map((x) => [x.id, x]));
+      c.consoles = hosts.map((h) => ({ id: h.id, name: h.name, ip: h.ip, enabled: was.get(h.id)?.enabled ?? false }));
+      saveSetting('unifi', c);
+      return unifiPublic(c);
+    } catch (e) { uFail(e); }
+  });
+
+  // Reads everything for one console (awaits happen here), then applies it in a single synchronous transaction.
+  async function unifiFetchConsole(c, con) {
+    const sites = await unifi.listSites(c, con.id, uDeps());
+    const out = [];
+    for (const site of sites) {
+      const nets = [];
+      for (const raw of await unifi.listNetworks(c, con.id, site.id, uDeps())) {
+        let n = unifi.toNetwork(raw);
+        if (!n && raw?.id) n = unifi.toNetwork(await unifi.networkDetails(c, con.id, site.id, raw.id, uDeps()).catch(() => null));
+        nets.push({ raw, n });
+      }
+      const clients = (await unifi.listClients(c, con.id, site.id, uDeps())).map(unifi.toClient).filter(Boolean);
+      out.push({ site, nets, clients });
+    }
+    return { con, sites: out };
+  }
+
+  function unifiApply(c, fetched, dry) {
+    const who = 'unifi';
+    const sum = { console: fetched.con.name, sites: 0, networks: { created: 0, updated: 0, skipped: 0 }, entries: { created: 0, updated: 0, pooled: 0, skipped: 0 }, errors: [] };
+    for (const { site, nets, clients } of fetched.sites) {
+      sum.sites++;
+      const siteName = (fetched.sites.length > 1 ? `${fetched.con.name} / ${site.name}` : fetched.con.name).slice(0, 80);
+      let ipamSite = one('SELECT * FROM sites WHERE tenant_id=? AND name=?', c.tenant_id, siteName);
+      if (!ipamSite && !dry) {
+        const r = run('INSERT INTO sites (tenant_id, name, description, icon) VALUES (?,?,?,?)', c.tenant_id, siteName, 'Zaimportowano z UniFi', 'building');
+        ipamSite = { id: Number(r.lastInsertRowid) };
+        log('create', 'site', `${siteName} (UniFi)`);
+      }
+      const known = ipamSite ? all('SELECT * FROM networks WHERE site_id=?', ipamSite.id) : [];
+      for (const { raw, n } of nets) {
+        if (!n) { sum.networks.skipped++; continue; }                          // no gateway-managed IPv4 subnet
+        if (parseCidr(n.cidr).prefix < 16) { sum.networks.skipped++; sum.errors.push(`${n.name}: sieć większa niż /16 pominięta`); continue; }
+        const have = known.find((k) => k.cidr === n.cidr);
+        if (have) {
+          const fill = { vlan: have.vlan ?? n.vlan, gateway: have.gateway || n.gateway, dhcp_start: have.dhcp_start || n.dhcp_start, dhcp_end: have.dhcp_end || n.dhcp_end, dns: have.dns || n.dns };
+          const changed = Object.keys(fill).some((k) => (fill[k] ?? '') !== (have[k] ?? ''));
+          if (changed && !dry) { run('UPDATE networks SET vlan=?, gateway=?, dhcp_start=?, dhcp_end=?, dns=? WHERE id=?', fill.vlan, fill.gateway, fill.dhcp_start, fill.dhcp_end, fill.dns, have.id); Object.assign(have, fill); }
+          if (changed) sum.networks.updated++;
+        } else {
+          sum.networks.created++;
+          if (dry) { known.push({ id: null, cidr: n.cidr, dhcp_start: n.dhcp_start, dhcp_end: n.dhcp_end }); continue; }
+          const r = run(`INSERT INTO networks (site_id, name, cidr, vlan, gateway, dhcp_start, dhcp_end, dns, description, auto_scan) VALUES (?,?,?,?,?,?,?,?,?,0)`,
+            ipamSite.id, n.name, n.cidr, n.vlan, n.gateway, n.dhcp_start, n.dhcp_end, n.dns, 'Zaimportowano z UniFi');
+          known.push({ id: Number(r.lastInsertRowid), site_id: ipamSite.id, cidr: n.cidr, dhcp_start: n.dhcp_start, dhcp_end: n.dhcp_end });
+          log('create', 'network', `${n.name} (${n.cidr}) z UniFi`);
+        }
+      }
+      for (const cl of clients) {
+        const net = known.find((k) => inCidr(cl.ip, k.cidr));
+        if (!net) { sum.entries.skipped++; continue; }
+        const mac = normalizeMac(cl.mac) || '';
+        const e = net.id ? one('SELECT * FROM entries WHERE network_id=? AND ip=?', net.id, cl.ip) : null;
+        if (e) {
+          sum.entries.updated++;
+          if (!dry) { run("UPDATE entries SET last_seen=datetime('now') WHERE id=?", e.id); observeMac(e, mac, who); }
+        } else if (inPool(net, cl.ip) && !c.import_dhcp) {
+          sum.entries.pooled++;
+          if (!dry && net.id) run(`INSERT INTO discovered (network_id, ip, mac, name) VALUES (?,?,?,?)
+            ON CONFLICT(network_id, ip) DO UPDATE SET last_seen=datetime('now'), name=excluded.name, mac=CASE WHEN excluded.mac!='' THEN excluded.mac ELSE mac END`, net.id, cl.ip, mac, cl.name.slice(0, 100));
+        } else {
+          sum.entries.created++;
+          if (dry || !net.id) continue;
+          const entry = { ip: cl.ip, fqdn: unifi.hostnameOf(cl.name), mac, type: 'other', status: 'used', tags: ['unifi', cl.wifi ? 'wifi' : 'lan'].join(','), description: unifi.hostnameOf(cl.name) ? '' : cl.name.slice(0, 200) };
+          const dupFqdn = entry.fqdn && one('SELECT 1 FROM entries e JOIN networks n ON n.id=e.network_id WHERE n.site_id=? AND e.fqdn=?', ipamSite.id, entry.fqdn);
+          const r = run(`INSERT INTO entries (network_id, ip, ip_num, fqdn, mac, type, status, tags, description, last_seen) VALUES (?,?,?,?,?,?,?,?,?,datetime('now'))`,
+            net.id, entry.ip, ipToInt(entry.ip), dupFqdn ? '' : entry.fqdn, mac, entry.type, entry.status, entry.tags, dupFqdn ? cl.name.slice(0, 200) : entry.description);
+          hist(net.id, Number(r.lastInsertRowid), entry.ip, 'create', snapshot({ ...entry, mac }, 'new'), who);
+        }
+      }
+    }
+    return sum;
+  }
+
+  async function unifiSync({ dry = false } = {}) {
+    const c = unifiCfg();
+    if (!c.api_key) throw bad('Najpierw zapisz klucz API');
+    if (!c.tenant_id || !one('SELECT id FROM tenants WHERE id=?', c.tenant_id)) throw bad('Wybierz tenanta, do którego trafią zaimportowane lokalizacje');
+    const cons = c.consoles.filter((x) => x.enabled);
+    if (!cons.length) throw bad('Zaznacz co najmniej jedną konsolę');
+    const results = [];
+    for (const con of cons) {
+      let fetched;
+      try { fetched = await unifiFetchConsole(c, con); }
+      catch (e) { results.push({ console: con.name, sites: 0, networks: {}, entries: {}, errors: [e.message] }); continue; }
+      db.exec('BEGIN');
+      try { results.push(unifiApply(c, fetched, dry)); db.exec(dry ? 'ROLLBACK' : 'COMMIT'); }
+      catch (e) { db.exec('ROLLBACK'); results.push({ console: con.name, sites: 0, networks: {}, entries: {}, errors: [e.message] }); }
+    }
+    const last = { at: new Date().toISOString(), dry, ok: results.every((r) => !r.errors.length), results };
+    if (!dry) saveSetting('unifi_last', last);
+    return last;
+  }
+  route('POST', '/api/admin/unifi/sync', async ({ body, user, ctx }) => {
+    needGlobalAdmin(user); sessionOnly(ctx);
+    actor = user.username;
+    try { const r = await unifiSync({ dry: !!body.dry_run }); if (!r.dry) { actor = user.username; log('update', 'settings', `synchronizacja UniFi: ${r.ok ? 'OK' : 'z błędami'}`); } return r; }
+    catch (e) { uFail(e); }
+  });
+  const runUnifiAuto = async () => {
+    const c = unifiCfg();
+    if (!c.auto_sync || !c.api_key) return null;
+    actor = 'unifi';
+    return unifiSync().catch((e) => { console.error('UniFi sync failed:', e.message); return null; });
+  };
+
   route('GET', '/api/openapi.json', () => buildOpenApi(routes, { version: opts.version }), { public: true });
   route('GET', '/api/docs', () => ({ raw: DOCS_HTML, contentType: 'text/html; charset=utf-8', inline: true }), { public: true });
 
-  return Object.assign(handle, { routes, runScheduledScans, runDailyBackup: () => runDailyIfDue(db, bdeps()) });
+  return Object.assign(handle, { routes, runUnifiAuto, runScheduledScans, runDailyBackup: () => runDailyIfDue(db, bdeps()) });
 }

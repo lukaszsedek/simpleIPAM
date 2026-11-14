@@ -75,6 +75,10 @@ const D = {
   'POST /api/admin/backups/gdrive/disconnect': ['Dysk Google', 'Odłącz konto Google i unieważnij token', 'session'],
   'POST /api/admin/restore/inspect': ['Przywracanie', 'Krok 1: zweryfikuj kopię i pokaż podgląd. Źródło: { name } (lokalna), { drive_id } (Dysk) albo surowy plik (Content-Type: application/octet-stream). Hasło szyfrowania: pole passphrase lub nagłówek X-Backup-Passphrase', 'session', { body: { name: 'string', drive_id: 'string', passphrase: 'string' }, returns: '{ token, current, backup, migrated, you_in_backup }' }],
   'POST /api/admin/restore/apply': ['Przywracanie', 'Krok 2: zapisz kopię bezpieczeństwa i podmień bazę; unieważnia sesje', 'session', { body: { token: 'string*' } }],
+  'GET /api/admin/unifi': ['UniFi', 'Konfiguracja integracji UniFi (bez klucza), lista konsol i ostatnia synchronizacja', 'global-admin'],
+  'PUT /api/admin/unifi': ['UniFi', 'Zapisz klucz API Site Managera, tenanta docelowego i wybór konsol', 'session', { body: { api_key: 'string (nowy klucz z unifi.ui.com)', tenant_id: 'integer', consoles: 'object[] ([{ id, enabled }])', import_dhcp: 'boolean (klienci z puli DHCP jako wpisy)', auto_sync: 'boolean (co godzinę)' } }],
+  'POST /api/admin/unifi/discover': ['UniFi', 'Pobierz listę konsol (hostów) z konta Ubiquiti', 'session'],
+  'POST /api/admin/unifi/sync': ['UniFi', 'Synchronizuj UniFi → simpleIPAM (jednokierunkowo). dry_run=true tylko pokazuje, co by się stało', 'session', { body: { dry_run: 'boolean' } }],
   // --- meta ---
   'GET /api/openapi.json': ['Dokumentacja', 'Ten opis API w formacie OpenAPI 3', 'public'],
   'GET /api/docs': ['Dokumentacja', 'Czytelna dokumentacja API (HTML)', 'public'],

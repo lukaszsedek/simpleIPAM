@@ -58,7 +58,80 @@ function GoogleLogin({ notify }) {
   );
 }
 
-function Settings({ notify }) {
+const when = (iso) => new Date(iso).toLocaleString('pl-PL', { dateStyle: 'short', timeStyle: 'short' });
+
+function SyncResult({ r }) {
+  return (
+    <div class={`last-run ${r.ok ? 'ok' : 'bad'}`}>
+      <div><b>{r.dry ? 'Podgląd (nic nie zapisano)' : r.ok ? 'Ostatnia synchronizacja' : 'Synchronizacja z błędami'}</b> · {when(r.at)}</div>
+      {r.results.map((c) => (
+        <div class="small-text">
+          <b>{c.console}</b>: {c.errors.length && !c.sites ? '' : `sieci +${c.networks.created} ~${c.networks.updated}, wpisy +${c.entries.created} ~${c.entries.updated}, z puli DHCP ${c.entries.pooled}, pominięte ${c.entries.skipped}`}
+          {c.errors.map((e) => <div class="error-text">{e}</div>)}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function Unifi({ tenants, notify }) {
+  const [c, setC] = useState(null);
+  const [key, setKey] = useState('');
+  const [busy, setBusy] = useState('');
+  const [res, setRes] = useState(null);
+  useEffect(() => { api.unifi().then((r) => { setC(r); setRes(r.last); }).catch((e) => notify(e.message, 'error')); }, []);
+  if (!c) return null;
+  const act = async (name, fn, done) => {
+    setBusy(name);
+    try { done(await fn()); } catch (e) { notify(e.message, 'error'); }
+    setBusy('');
+  };
+  const saveKey = () => act('key', () => api.saveUnifi({ api_key: key }), (r) => { setC(r); setKey(''); notify('Klucz zapisany'); });
+  const discover = () => act('discover', api.unifiDiscover, (r) => { setC(r); notify(`Znaleziono konsol: ${r.consoles.length}`); });
+  const patch = (changes, msg) => act('save', () => api.saveUnifi(changes), (r) => { setC(r); if (msg) notify(msg); });
+  const toggle = (id, on) => patch({ consoles: c.consoles.map((x) => ({ id: x.id, enabled: x.id === id ? on : x.enabled })) });
+  const sync = (dry) => act(dry ? 'dry' : 'sync', () => api.unifiSync(dry), (r) => { setRes(r); notify(dry ? 'Podgląd gotowy' : r.ok ? 'Synchronizacja zakończona' : 'Synchronizacja z błędami', r.ok ? 'ok' : 'error'); });
+  const ready = c.key_set && c.tenant_id && c.consoles.some((x) => x.enabled);
+  return (
+    <section class="card span-2">
+      <h3>UniFi (Site Manager)</h3>
+      <p class="muted small-text">Jednokierunkowy import z Twoich konsol UniFi (Cloud Gateway, UDM…) przez konto Ubiquiti: sieci z VLAN-ami i zakresem DHCP, urządzenia o stałych adresach jako wpisy, klienci z puli DHCP jako „nowe urządzenia”. Adresy MAC z UniFi zasilają wykrywanie zmian MAC.</p>
+      <div class="form-grid">
+        <Field label="Klucz API Site Managera" span hint={c.key_set ? 'zapisany — wpisz nowy, by go zmienić (lista konsol zostanie wczytana ponownie)' : 'unifi.ui.com → API → Create API Key (klucz musi należeć do właściciela konsol)'}>
+          <input type="password" autocomplete="off" value={key} placeholder={c.key_set ? '(zapisany)' : ''} onInput={(e) => setKey(e.target.value)} /></Field>
+      </div>
+      <div class="form-actions">
+        <button class="btn primary" disabled={!key || busy === 'key'} onClick={saveKey}>Zapisz klucz</button>
+        <button class="btn ghost" disabled={!c.key_set || busy === 'discover'} onClick={discover}>{busy === 'discover' ? 'Szukam…' : 'Pobierz listę konsol'}</button>
+      </div>
+      {c.consoles.length > 0 && (
+        <div class="unifi-consoles">
+          <h4>Konsole do synchronizacji</h4>
+          {c.consoles.map((x) => (
+            <label class="toggle"><input type="checkbox" checked={x.enabled} onChange={(e) => toggle(x.id, e.target.checked)} /> <b>{x.name}</b> <span class="muted small-text mono">{x.ip}</span></label>
+          ))}
+          <div class="form-grid">
+            <Field label="Tenant dla zaimportowanych lokalizacji" hint="Każda konsola trafi do osobnej lokalizacji o jej nazwie">
+              <select value={c.tenant_id ?? ''} onChange={(e) => patch({ tenant_id: e.target.value ? Number(e.target.value) : null })}>
+                <option value="">— wybierz —</option>
+                {tenants.map((t) => <option value={t.id}>{t.name}</option>)}
+              </select></Field>
+          </div>
+          <label class="toggle"><input type="checkbox" checked={c.import_dhcp} onChange={(e) => patch({ import_dhcp: e.target.checked })} /> Klienci z puli DHCP też jako wpisy (domyślnie trafiają do „nowych urządzeń”)</label>
+          <label class="toggle"><input type="checkbox" checked={c.auto_sync} onChange={(e) => patch({ auto_sync: e.target.checked })} /> Synchronizuj automatycznie co godzinę</label>
+          <div class="form-actions">
+            <button class="btn ghost" disabled={!ready || !!busy} onClick={() => sync(true)}>{busy === 'dry' ? 'Liczę…' : 'Podgląd'}</button>
+            <button class="btn primary" disabled={!ready || !!busy} onClick={() => sync(false)}>{busy === 'sync' ? 'Synchronizuję…' : 'Synchronizuj teraz'}</button>
+          </div>
+        </div>
+      )}
+      {res && <SyncResult r={res} />}
+      <p class="muted small-text">Wymaga konsoli z UniFi OS ≥ 5.0.3 online w chmurze Ubiquiti (limit: 100 zapytań/min na konsolę). Istniejące wpisy i sieci nie są nadpisywane — uzupełniane są tylko puste pola, a rozbieżne MAC-i są zgłaszane jako ostrzeżenia.</p>
+    </section>
+  );
+}
+
+function Settings({ notify, tenants }) {
   const [reg, setReg] = useState(true);
   const [sys, setSys] = useState(null);
   useEffect(() => { api.me().then((r) => setReg(r.registration_open)); api.system().then(setSys).catch((e) => notify(e.message, 'error')); }, []);
@@ -73,6 +146,7 @@ function Settings({ notify }) {
         <p class="muted small-text">Nowe konta nie mają dostępu do żadnych danych, dopóki nie nadasz im roli. Pierwsze konto w systemie zawsze może się zarejestrować.</p>
       </section>
       <GoogleLogin notify={notify} />
+      <Unifi tenants={tenants} notify={notify} />
       <section class="card">
         <h3>System</h3>
         {sys ? (
@@ -108,7 +182,7 @@ export function Admin({ tab, tenants, me, notify, onUsersChanged }) {
       </div>
       {tab === 'users' && <Users tenants={tenants} me={me} notify={notify} onChanged={onUsersChanged} />}
       {tab === 'backups' && <Backups notify={notify} />}
-      {tab === 'settings' && <Settings notify={notify} />}
+      {tab === 'settings' && <Settings notify={notify} tenants={tenants} />}
       {tab === 'audit' && <Audit />}
     </div>
   );

@@ -121,6 +121,10 @@ Panel administratora → **Kopie zapasowe**: ikona zegara przy kopii na liście 
 
 Każdy wpis ma historię (ikona zegara w wierszu, a „Historia” nad tabelą pokazuje całą sieć): kto, kiedy i co zmienił (stara → nowa wartość). Skan odczytuje adresy MAC z tablicy ARP; gdy znany adres IP odpowiada innym MAC niż zapisany, wpis dostaje ostrzeżenie z przyciskami „Zatwierdź” (zapisuje nowy MAC) i „Ignoruj”. Aplikacja widzi MAC tylko w swoim segmencie L2, więc w Dockerze na Linuksie uruchom kontener z `network_mode: host` (w trybie bridge skan nadal działa, ale bez MAC).
 
+### Integracja z UniFi
+
+Administracja → Ustawienia → „UniFi (Site Manager)”. Wystarczy jeden klucz API z unifi.ui.com (musi należeć do właściciela konsol): aplikacja łączy się z `api.ui.com` i przez Cloud Connector czyta Network API każdej wybranej konsoli (Cloud Gateway, UDM…; UniFi OS ≥ 5.0.3, konsola online w chmurze). Import jest jednokierunkowy (UniFi → simpleIPAM): każda konsola staje się lokalizacją w wybranym tenancie, sieci dostają VLAN, bramę, zakres DHCP i DNS, klienci o stałych adresach trafiają do wpisów, a klienci z puli DHCP do „nowych urządzeń” (opcja: też jako wpisy). Istniejące dane nie są nadpisywane — uzupełniane są tylko puste pola, a inny MAC niż zapisany jest zgłaszany jako ostrzeżenie. „Podgląd” pokazuje, co by się stało, bez zapisu; synchronizacja może działać co godzinę.
+
 ### API
 
 Dokumentacja wszystkich endpointów jest w aplikacji: `/api/docs` (czytelna strona) i `/api/openapi.json` (OpenAPI 3, do importu w Postmanie/Insomnii lub generatorach klientów). Uwierzytelnianie tokenem: `Authorization: Bearer ipam_…` (tokeny tworzysz w aplikacji).

@@ -299,12 +299,12 @@ export function Network({ id, notify, reload, onEditNet, onDeleteNet }) {
       {found.length > 0 && (
         <section class="card">
           <h3>Nowe urządzenia w sieci ({found.length})</h3>
-          <p class="muted small-text">Odpowiadają na ping, ale nie ma ich w IPAM.</p>
+          <p class="muted small-text">Odpowiadają na ping albo zgłasza je kontroler UniFi, ale nie ma ich w IPAM.</p>
           <ul class="scan-list">
             {found.map((d) => (
-              <li><span class="mono">{d.ip}</span><span class="muted small-text">wykryto {ago(d.first_seen)}</span>
+              <li><span class="mono">{d.ip}</span>{d.name && <b>{d.name}</b>}{d.mac && <span class="mono muted small-text">{d.mac}</span>}<span class="muted small-text">wykryto {ago(d.first_seen)}</span>
                 {canEdit && <span class="row-btns">
-                  <button class="btn small" onClick={() => setForm({ ip: d.ip })}>Dodaj</button>
+                  <button class="btn small" onClick={() => setForm({ ip: d.ip, mac: d.mac, description: d.name })}>Dodaj</button>
                   <button class="btn small ghost" onClick={async () => { await api.dismiss(d.id); load(); reload(); }}>Ignoruj</button>
                 </span>}</li>
             ))}

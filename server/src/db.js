@@ -180,6 +180,7 @@ function openRaw(path) {
   addColumn('entries', 'last_seen', 'TEXT');
   addColumn('entries', 'seen_mac', "TEXT NOT NULL DEFAULT ''");   // MAC last observed by a scan
   addColumn('entries', 'mac_ack', "TEXT NOT NULL DEFAULT ''");     // observed MAC the user chose to ignore
+  addColumn('discovered', 'name', "TEXT NOT NULL DEFAULT ''");   // device name reported by an integration (UniFi)
   addColumn('discovered', 'mac', "TEXT NOT NULL DEFAULT ''");
   addColumn('users', 'has_password', 'INTEGER NOT NULL DEFAULT 1');   // 0 = created through Google, password never chosen
   addColumn('networks', 'auto_scan', 'INTEGER NOT NULL DEFAULT 0');

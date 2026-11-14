@@ -364,3 +364,7 @@ a.icon-btn { text-decoration: none; }
 .mac-alert { flex-direction: column; align-items: flex-start; gap: 6px; }
 .mac-actions { display: flex; gap: 6px; white-space: nowrap; }
 .mac-alert .btn.small { padding: 3px 8px; font-size: 12px; color: inherit; }
+
+.unifi-consoles { display: grid; gap: 10px; margin: 16px 0; padding-top: 12px; border-top: 1px solid var(--border); }
+.unifi-consoles h4 { margin: 0; font-size: 13px; color: var(--muted); font-weight: 600; }
+.card > p.muted + .form-grid, .card > p.muted + .field { margin-top: 12px; }
