@@ -123,6 +123,19 @@ function openRaw(path) {
       dismissed INTEGER NOT NULL DEFAULT 0,
       UNIQUE (network_id, ip)
     );
+    -- Per-entry change log: changes is JSON { field: [old, new] }; rows outlive the entry (entry_id is not a FK).
+    CREATE TABLE IF NOT EXISTS entry_history (
+      id INTEGER PRIMARY KEY,
+      network_id INTEGER NOT NULL REFERENCES networks(id) ON DELETE CASCADE,
+      entry_id INTEGER,
+      ip TEXT NOT NULL,
+      action TEXT NOT NULL,
+      changes TEXT NOT NULL DEFAULT '{}',
+      actor TEXT NOT NULL DEFAULT '',
+      ts TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_hist_entry ON entry_history(entry_id);
+    CREATE INDEX IF NOT EXISTS idx_hist_net ON entry_history(network_id, id);
     CREATE TABLE IF NOT EXISTS audit (
       id INTEGER PRIMARY KEY,
       ts TEXT NOT NULL DEFAULT (datetime('now')),
@@ -165,6 +178,9 @@ function openRaw(path) {
     if (!db.prepare(`PRAGMA table_info(${table})`).all().some((c) => c.name === col)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${col} ${ddl}`);
   };
   addColumn('entries', 'last_seen', 'TEXT');
+  addColumn('entries', 'seen_mac', "TEXT NOT NULL DEFAULT ''");   // MAC last observed by a scan
+  addColumn('entries', 'mac_ack', "TEXT NOT NULL DEFAULT ''");     // observed MAC the user chose to ignore
+  addColumn('discovered', 'mac', "TEXT NOT NULL DEFAULT ''");
   addColumn('users', 'has_password', 'INTEGER NOT NULL DEFAULT 1');   // 0 = created through Google, password never chosen
   addColumn('networks', 'auto_scan', 'INTEGER NOT NULL DEFAULT 0');
   if (!db.prepare('PRAGMA table_info(audit)').all().some((c) => c.name === 'actor')) {

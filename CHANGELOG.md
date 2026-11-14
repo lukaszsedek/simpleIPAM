@@ -5,6 +5,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+### Added
+- Change history per entry and per network (who changed what, old → new), including CSV import and bulk edits; survives deleting the entry.
+- MAC change detection: scans read the ARP table; a known IP answering with a different MAC raises a warning (accept / ignore), entries without a MAC get a suggestion. Needs the container to share the LAN segment (`network_mode: host`).
+
 ## [0.3.0] - 2026-11-14
 
 ### Added

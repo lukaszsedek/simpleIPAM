@@ -65,7 +65,7 @@ function EntryForm({ net, entry, onClose, onSaved, notify }) {
 
 function ScanModal({ net, onClose, onAdd }) {
   const [state, setState] = useState({ loading: true });
-  useEffect(() => { api.scan(net.id).then((r) => setState({ alive: r.alive })).catch((e) => setState({ error: e.message })); }, []);
+  useEffect(() => { api.scan(net.id).then((r) => setState({ alive: r.alive, macs: r.macs })).catch((e) => setState({ error: e.message })); }, []);
   const fresh = state.alive?.filter((a) => !a.known) ?? [];
   return (
     <Modal title={`Skan ${net.cidr}`} onClose={onClose}>
@@ -76,12 +76,47 @@ function ScanModal({ net, onClose, onAdd }) {
           <p class="muted">Aktywne hosty: {state.alive.length}, nieznane w IPAM: {fresh.length}</p>
           <ul class="scan-list">
             {fresh.map((a) => (
-              <li><span class="mono">{a.ip}</span><button class="btn small" onClick={() => onAdd(a.ip)}>Dodaj</button></li>
+              <li><span class="mono">{a.ip}</span>{a.mac && <span class="mono muted small-text">{a.mac}</span>}<button class="btn small" onClick={() => onAdd(a.ip)}>Dodaj</button></li>
             ))}
             {!fresh.length && <li class="muted">Wszystkie aktywne hosty są już w bazie 🎉</li>}
           </ul>
+          {state.alive.length > 0 && !state.macs && (
+            <p class="muted small-text">Nie odczytano żadnych adresów MAC. Aplikacja widzi je tylko w swoim segmencie sieci — w Dockerze uruchom kontener z <span class="mono">network_mode: host</span> (Linux), aby wykrywać zmiany MAC.</p>
+          )}
         </>
       )}
+    </Modal>
+  );
+}
+
+const FIELD_LABELS = { ip: 'IP', fqdn: 'FQDN', mac: 'MAC', type: 'Typ', status: 'Status', tags: 'Tagi', description: 'Opis' };
+const show = (k, v) => (v === '' || v == null ? '∅' : k === 'type' ? TYPE_LABELS[v] ?? v : k === 'status' ? STATUS_LABELS[v] ?? v : v);
+const ACTIONS = { create: 'dodano', update: 'zmieniono', delete: 'usunięto', mac_seen: 'zauważył inny MAC', mac_ignored: 'zignorowano MAC' };
+
+// Change log of one entry (or, without `entry`, of the whole network).
+function HistoryModal({ net, entry, onClose }) {
+  const [rows, setRows] = useState(null);
+  useEffect(() => { (entry ? api.entryHistory(entry.id) : api.networkHistory(net.id)).then(setRows).catch(() => setRows([])); }, []);
+  return (
+    <Modal title={entry ? `Historia ${entry.ip}` : `Historia zmian · ${net.name}`} onClose={onClose} wide>
+      {!rows && <p class="muted">Ładowanie…</p>}
+      {rows && !rows.length && <p class="muted">Brak zapisanych zmian. Historia jest prowadzona od chwili wdrożenia tej funkcji.</p>}
+      {rows && <ul class="timeline history">
+        {rows.map((r) => (
+          <li>
+            <i class={`dot ${r.action === 'delete' ? 'delete' : r.action === 'create' ? 'create' : 'update'}`} />
+            <span>
+              <b>{r.actor || 'system'}</b> {ACTIONS[r.action] ?? r.action}{!entry && <> <span class="mono">{r.ip}</span></>}
+              <span class="diffs">
+                {Object.entries(r.changes).map(([k, [a, b]]) => (
+                  <span class="diff"><em>{FIELD_LABELS[k] ?? k}</em>{r.action === 'create' ? <b>{show(k, b)}</b> : r.action === 'delete' ? <s>{show(k, a)}</s> : <><s>{show(k, a)}</s> → <b>{show(k, b)}</b></>}</span>
+                ))}
+              </span>
+            </span>
+            <time>{r.ts}</time>
+          </li>
+        ))}
+      </ul>}
     </Modal>
   );
 }
@@ -157,6 +192,7 @@ export function Network({ id, notify, reload, onEditNet, onDeleteNet }) {
   const [status, setStatus] = useState('all');
   const [form, setForm] = useState(null);
   const [scan, setScan] = useState(false);
+  const [hist, setHist] = useState(null);   // entry, or true for the whole network
   const [issues, setIssues] = useState([]);
   const [found, setFound] = useState([]);
   const [sel, setSel] = useState(new Set());
@@ -190,6 +226,10 @@ export function Network({ id, notify, reload, onEditNet, onDeleteNet }) {
   const patch = async (e, changes) => {
     try { await api.saveEntry({ ...e, ...changes }); load(); reload(); }
     catch (err) { notify(err.message, 'error'); load(); }
+  };
+  const macAct = async (e, action) => {
+    try { await api.macAction(e.id, action); notify(action === 'accept' ? `MAC ${e.ip} zaktualizowany` : 'Zignorowano ten adres MAC'); refresh(); }
+    catch (err) { notify(err.message, 'error'); }
   };
   const remove = async (e) => {
     if (!confirm(`Usunąć ${e.ip}${e.fqdn ? ` (${e.fqdn})` : ''}?`)) return;
@@ -287,6 +327,7 @@ export function Network({ id, notify, reload, onEditNet, onDeleteNet }) {
             ))}
           </div>
           <div class="spacer" />
+          <button class="btn ghost" onClick={() => setHist(true)}><Icon name="history" />Historia</button>
           {canEdit && <button class="btn ghost" onClick={() => setScan(true)}><Icon name="radar" />Skanuj</button>}
           <details class="menu">
             <summary class="btn ghost"><Icon name="download" />Eksport</summary>
@@ -318,7 +359,18 @@ export function Network({ id, notify, reload, onEditNet, onDeleteNet }) {
                   {canEdit && <td class="check"><input type="checkbox" checked={sel.has(e.id)} onChange={() => toggle(e.id)} aria-label={`Zaznacz ${e.ip}`} /></td>}
                   <td class="mono ip">{e.ip}</td>
                   <td><EditableCell readOnly={!canEdit} value={e.fqdn} placeholder="—" onSave={(v) => patch(e, { fqdn: v })} /></td>
-                  <td class="mono muted">{e.mac || '—'}</td>
+                  <td class="mono muted">{e.mac || '—'}
+                    {e.mac_alert && (
+                      <div class="mac-alert" role="alert">
+                        <span title="Skan widzi inny adres MAC niż zapisany">⚠ widziany: {e.seen_mac}</span>
+                        {canEdit && <div class="mac-actions"><button class="btn small" onClick={() => macAct(e, 'accept')}>Zatwierdź</button>
+                        <button class="btn small ghost" onClick={() => macAct(e, 'ignore')}>Ignoruj</button></div>}
+                      </div>
+                    )}
+                    {e.mac_suggest && (
+                      <div class="mac-suggest">wykryty: {e.seen_mac}{canEdit && <button class="link-btn" onClick={() => macAct(e, 'accept')}>użyj</button>}</div>
+                    )}
+                  </td>
                   <td><span class="chip">{TYPE_LABELS[e.type]}</span></td>
                   <td>
                     <select class={`status-select ${e.status}`} disabled={!canEdit} value={e.status} onChange={(ev) => patch(e, { status: ev.target.value })}>
@@ -329,6 +381,7 @@ export function Network({ id, notify, reload, onEditNet, onDeleteNet }) {
                     {e.tags && <div class="tags">{e.tags.split(',').map((t) => <span class="tag">#{t}</span>)}</div>}</td>
                   <td class="muted small-text nowrap" title={e.last_seen ?? ''}>{ago(e.last_seen)}</td>
                   <td class="row-actions">
+                    <button class="icon-btn" onClick={() => setHist(e)} aria-label={`Historia ${e.ip}`} title="Historia zmian"><Icon name="history" size={16} /></button>
                     {canEdit && <><button class="icon-btn" onClick={() => setForm(e)} aria-label="Edytuj"><Icon name="edit" size={16} /></button>
                     <button class="icon-btn danger" onClick={() => remove(e)} aria-label="Usuń"><Icon name="trash" size={16} /></button></>}
                   </td>
@@ -341,6 +394,7 @@ export function Network({ id, notify, reload, onEditNet, onDeleteNet }) {
       </section>
 
       {form && <EntryForm net={net} entry={form} notify={notify} onClose={() => setForm(null)} onSaved={() => { setForm(null); refresh(); }} />}
+      {hist && <HistoryModal net={net} entry={hist === true ? null : hist} onClose={() => setHist(null)} />}
       {scan && <ScanModal net={net} onClose={() => setScan(false)} onAdd={(ip) => { setScan(false); setForm({ ip }); }} />}
     </div>
   );

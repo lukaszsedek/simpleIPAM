@@ -18,7 +18,7 @@ const D = {
   'DELETE /api/networks/:id': ['Sieci', 'Usuń sieć wraz z wpisami', 'admin'],
   'GET /api/networks/:id': ['Sieci', 'Szczegóły sieci: wpisy, statystyki, ostatnio zauważone hosty', 'reader'],
   'GET /api/networks/:id/next-free': ['Sieci', 'Pierwszy wolny adres (pomija bramę, zakres DHCP i wpisy)', 'reader', { query: { from: 'string (IP) — szukaj od tego adresu' }, returns: '{ ip: string|null }' }],
-  'POST /api/networks/:id/scan': ['Sieci', 'Przeskanuj sieć pingiem (sieci do /22)', 'contributor'],
+  'POST /api/networks/:id/scan': ['Sieci', 'Przeskanuj sieć pingiem (sieci do /22) i odczytaj MAC z tablicy ARP (gdy serwer jest w tym samym segmencie L2). Zwraca { alive: [{ ip, known, mac }], macs }', 'contributor'],
   'GET /api/networks/:id/issues': ['Sieci', 'Ostrzeżenia spójności: duplikaty, kolizje z DHCP, nakładające się sieci', 'reader'],
   'GET /api/networks/:id/discovered': ['Sieci', 'Hosty znalezione skanem, a niewpisane do sieci', 'reader'],
   'POST /api/discovered/:id/dismiss': ['Sieci', 'Ukryj znaleziony host', 'contributor'],
@@ -33,6 +33,9 @@ const D = {
   'POST /api/networks/:id/import': ['Wymiana danych', 'Import wpisów z CSV (wymagana kolumna ip)', 'contributor', { body: { csv: 'string*' } }],
   'GET /api/networks/:id/export/:format': ['Wymiana danych', 'Eksport do DNS/DHCP: format = hosts | dnsmasq | bind', 'reader', { returns: 'text/plain' }],
   'GET /api/audit': ['Dziennik', 'Dziennik zmian (ostatnie wpisy)', 'reader'],
+  'GET /api/entries/:id/history': ['Wpisy', 'Historia zmian wpisu (do 200 zdarzeń): pola [stara, nowa], autor, czas', 'reader'],
+  'GET /api/networks/:id/history': ['Wpisy', 'Historia zmian w sieci albo jednego adresu', 'reader', { query: { ip: 'string — tylko ten adres' } }],
+  'POST /api/entries/:id/mac': ['Wpisy', 'Rozstrzygnij zmianę MAC wykrytą skanem: accept = zapisz wykryty MAC we wpisie, ignore = nie ostrzegaj o tym MAC', 'contributor', { body: { action: 'accept|ignore*' } }],
   // --- session & users ---
   'GET /api/me': ['Sesja', 'Zalogowany użytkownik, wersja i flagi (setup_required, registration_open, google_login)', 'public'],
   'GET /api/health': ['Sesja', 'Test żywotności (Docker healthcheck)', 'public'],

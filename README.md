@@ -117,6 +117,10 @@ Panel administratora → **Kopie zapasowe**: ikona zegara przy kopii na liście 
 2. Pokazuje porównanie „teraz → po przywróceniu” oraz ostrzeżenia, np. gdy w kopii nie ma żadnego globalnego administratora albo Twojego konta.
 3. Po potwierdzeniu zapisuje **kopię bezpieczeństwa obecnego stanu** (na liście kopii — jej przywrócenie cofa operację), podmienia bazę bez restartu i wylogowuje wszystkich.
 
+### Historia zmian i wykrywanie zmiany MAC
+
+Każdy wpis ma historię (ikona zegara w wierszu, a „Historia” nad tabelą pokazuje całą sieć): kto, kiedy i co zmienił (stara → nowa wartość). Skan odczytuje adresy MAC z tablicy ARP; gdy znany adres IP odpowiada innym MAC niż zapisany, wpis dostaje ostrzeżenie z przyciskami „Zatwierdź” (zapisuje nowy MAC) i „Ignoruj”. Aplikacja widzi MAC tylko w swoim segmencie L2, więc w Dockerze na Linuksie uruchom kontener z `network_mode: host` (w trybie bridge skan nadal działa, ale bez MAC).
+
 ### API
 
 Dokumentacja wszystkich endpointów jest w aplikacji: `/api/docs` (czytelna strona) i `/api/openapi.json` (OpenAPI 3, do importu w Postmanie/Insomnii lub generatorach klientów). Uwierzytelnianie tokenem: `Authorization: Bearer ipam_…` (tokeny tworzysz w aplikacji).

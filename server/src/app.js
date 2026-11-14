@@ -8,6 +8,7 @@ import * as gd from './gdrive.js';
 import * as gl from './google-login.js';
 import { isEncrypted, decrypt } from './backup-crypto.js';
 import { buildOpenApi, DOCS_HTML } from './openapi.js';
+import { readNeighbors } from './neighbors.js';
 import { readFileSync, rmSync, existsSync, writeFileSync, copyFileSync, mkdirSync, readdirSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import { summarize, validateAndPrepare } from './restore.js';
@@ -91,7 +92,8 @@ export function createApi(db, opts = {}) {
     const row = one(`SELECT COUNT(*) AS used,
         SUM(status='reserved') AS reserved FROM entries WHERE network_id=? AND status!='free'`, n.id);
     const fresh = one('SELECT COUNT(*) AS n FROM discovered WHERE network_id=? AND dismissed=0', n.id).n;
-    return { total, dhcp, used: row.used, reserved: row.reserved ?? 0, prefix: c.prefix, new_hosts: fresh };
+    const alerts = all('SELECT mac, seen_mac, mac_ack FROM entries WHERE network_id=? AND seen_mac!=\'\'', n.id).filter(macAlert).length;
+    return { total, dhcp, used: row.used, reserved: row.reserved ?? 0, prefix: c.prefix, new_hosts: fresh, mac_alerts: alerts };
   }
 
   // ---------- entries ----------
@@ -110,6 +112,17 @@ export function createApi(db, opts = {}) {
     if (dup && dup.id !== existingId) throw new HttpError(409, `Adres ${ip} jest już wpisany w tej sieci`);
     return { ip, ip_num: n, fqdn, mac, type, status, tags, description: str(b.description) };
   }
+
+  // ---------- entry history ----------
+  const FIELDS = ['ip', 'fqdn', 'mac', 'type', 'status', 'tags', 'description'];
+  const hist = (netId, entryId, ip, action, changes, who = actor) => {
+    if (!Object.keys(changes).length) return;
+    run('INSERT INTO entry_history (network_id, entry_id, ip, action, changes, actor) VALUES (?,?,?,?,?,?)', netId, entryId, ip, action, JSON.stringify(changes), who);
+  };
+  const diff = (a, b) => Object.fromEntries(FIELDS.filter((f) => String(a[f] ?? '') !== String(b[f] ?? '')).map((f) => [f, [a[f] ?? '', b[f] ?? '']]));
+  const snapshot = (e, side) => Object.fromEntries(FIELDS.filter((f) => String(e[f] ?? '') !== '').map((f) => [f, side === 'new' ? ['', e[f]] : [e[f], '']]));
+  const macAlert = (e) => !!(e.mac && e.seen_mac && e.seen_mac !== e.mac && e.seen_mac !== e.mac_ack);
+  const withFlags = (e) => ({ ...e, mac_alert: macAlert(e), mac_suggest: !e.mac && !!e.seen_mac });
 
   function nextFree(net, from = null) {
     const [lo, hi] = usableRange(net.cidr);
@@ -142,14 +155,27 @@ export function createApi(db, opts = {}) {
       }
     }));
     alive.sort((a, b) => a - b);
-    const known = new Set(all('SELECT ip_num FROM entries WHERE network_id=?', net.id).map((r) => r.ip_num));
+    const arp = await (opts.neighbors ?? readNeighbors)().catch(() => new Map());
+    const entries = new Map(all('SELECT * FROM entries WHERE network_id=?', net.id).map((e) => [e.ip_num, e]));
+    let macs = 0;
     for (const i of alive) {
       const ip = intToIp(i);
-      if (known.has(i)) run("UPDATE entries SET last_seen=datetime('now') WHERE network_id=? AND ip=?", net.id, ip);
-      else run(`INSERT INTO discovered (network_id, ip) VALUES (?,?)
-        ON CONFLICT(network_id, ip) DO UPDATE SET last_seen=datetime('now')`, net.id, ip);
+      const mac = arp.get(ip) ?? '';
+      if (mac) macs++;
+      const e = entries.get(i);
+      if (e) {
+        run("UPDATE entries SET last_seen=datetime('now') WHERE id=?", e.id);
+        if (mac && mac !== e.seen_mac) {
+          run('UPDATE entries SET seen_mac=? WHERE id=?', mac, e.id);
+          // a known device answering with a different MAC than the recorded one: worth a trail
+          if (e.mac && mac !== e.mac && mac !== e.mac_ack) hist(net.id, e.id, ip, 'mac_seen', { mac: [e.mac, mac] }, 'skan');
+        }
+      } else {
+        run(`INSERT INTO discovered (network_id, ip, mac) VALUES (?,?,?)
+          ON CONFLICT(network_id, ip) DO UPDATE SET last_seen=datetime('now'), mac=CASE WHEN excluded.mac!='' THEN excluded.mac ELSE mac END`, net.id, ip, mac);
+      }
     }
-    return alive.map((i) => ({ ip: intToIp(i), known: known.has(i) }));
+    return { hosts: alive.map((i) => ({ ip: intToIp(i), known: entries.has(i), mac: arp.get(intToIp(i)) ?? '' })), macs };
   }
 
   // ---------- csv ----------
@@ -284,7 +310,7 @@ export function createApi(db, opts = {}) {
     need(user, n.site_id, 'reader');
     const site = one('SELECT * FROM sites WHERE id=?', n.site_id);
     const tenant = one('SELECT * FROM tenants WHERE id=?', site.tenant_id);
-    return { ...n, site, tenant, role: roleAt(user, n.site_id), stats: netStats(n), entries: all('SELECT * FROM entries WHERE network_id=? ORDER BY ip_num', n.id) };
+    return { ...n, site, tenant, role: roleAt(user, n.site_id), stats: netStats(n), entries: all('SELECT * FROM entries WHERE network_id=? ORDER BY ip_num', n.id).map(withFlags) };
   });
   route('GET', '/api/networks/:id/next-free', ({ params, query, user }) => {
     const n = must(one('SELECT * FROM networks WHERE id=?', params.id), 'Sieć');
@@ -294,7 +320,8 @@ export function createApi(db, opts = {}) {
   route('POST', '/api/networks/:id/scan', async ({ params, user }) => {
     const n = must(one('SELECT * FROM networks WHERE id=?', params.id), 'Sieć');
     need(user, n.site_id, 'contributor');
-    return { alive: await scan(n) };
+    const r = await scan(n);
+    return { alive: r.hosts, macs: r.macs };
   });
 
   route('POST', '/api/networks/:id/entries', ({ params, body, user }) => unique(() => {
@@ -303,7 +330,10 @@ export function createApi(db, opts = {}) {
     const e = entryInput(body, net);
     const r = run(`INSERT INTO entries (network_id, ip, ip_num, fqdn, mac, type, status, tags, description)
       VALUES (?,?,?,?,?,?,?,?,?)`, net.id, e.ip, e.ip_num, e.fqdn, e.mac, e.type, e.status, e.tags, e.description);
+    const seen = one('SELECT mac FROM discovered WHERE network_id=? AND ip=?', net.id, e.ip)?.mac ?? '';
     run('DELETE FROM discovered WHERE network_id=? AND ip=?', net.id, e.ip);
+    if (seen) run('UPDATE entries SET seen_mac=? WHERE id=?', seen, r.lastInsertRowid);
+    hist(net.id, Number(r.lastInsertRowid), e.ip, 'create', snapshot(e, 'new'));
     log('create', 'entry', `${e.ip} ${e.fqdn}`.trim());
     return { id: Number(r.lastInsertRowid), network_id: net.id, ...e };
   }));
@@ -314,15 +344,46 @@ export function createApi(db, opts = {}) {
     const e = entryInput(body, net, old.id);
     run(`UPDATE entries SET ip=?, ip_num=?, fqdn=?, mac=?, type=?, status=?, tags=?, description=?,
       updated_at=datetime('now') WHERE id=?`, e.ip, e.ip_num, e.fqdn, e.mac, e.type, e.status, e.tags, e.description, old.id);
+    hist(old.network_id, old.id, e.ip, 'update', diff(old, e));
     log('update', 'entry', `${e.ip} ${e.fqdn}`.trim());
     return { id: old.id, network_id: old.network_id, ...e };
   }));
   route('DELETE', '/api/entries/:id', ({ params, user }) => {
     const e = must(one('SELECT * FROM entries WHERE id=?', params.id), 'Wpis');
     need(user, one('SELECT site_id FROM networks WHERE id=?', e.network_id).site_id, 'contributor');
+    hist(e.network_id, e.id, e.ip, 'delete', snapshot(e, 'old'));
     run('DELETE FROM entries WHERE id=?', params.id);
     log('delete', 'entry', `${e.ip} ${e.fqdn}`.trim());
     return { ok: true };
+  });
+
+  // Resolve a MAC alert: take the observed MAC as the entry's own, or ignore that particular observed MAC.
+  route('POST', '/api/entries/:id/mac', ({ params, body, user }) => {
+    const e = must(one('SELECT * FROM entries WHERE id=?', params.id), 'Wpis');
+    need(user, one('SELECT site_id FROM networks WHERE id=?', e.network_id).site_id, 'contributor');
+    if (!e.seen_mac) throw bad('Brak wykrytego adresu MAC dla tego wpisu');
+    if (body.action === 'accept') {
+      run("UPDATE entries SET mac=?, mac_ack='', updated_at=datetime('now') WHERE id=?", e.seen_mac, e.id);
+      hist(e.network_id, e.id, e.ip, 'update', { mac: [e.mac, e.seen_mac] });
+      log('update', 'entry', `${e.ip}: zatwierdzono MAC ${e.seen_mac}`);
+    } else if (body.action === 'ignore') {
+      run('UPDATE entries SET mac_ack=? WHERE id=?', e.seen_mac, e.id);
+      hist(e.network_id, e.id, e.ip, 'mac_ignored', { mac: [e.mac, e.seen_mac] });
+    } else throw bad('Nieznana operacja (accept | ignore)');
+    return withFlags(one('SELECT * FROM entries WHERE id=?', e.id));
+  });
+
+  const histRows = (where, ...p) => all(`SELECT id, entry_id, ip, action, changes, actor, ts FROM entry_history WHERE ${where} ORDER BY id DESC LIMIT 200`, ...p)
+    .map((r) => ({ ...r, changes: JSON.parse(r.changes) }));
+  route('GET', '/api/entries/:id/history', ({ params, user }) => {
+    const e = must(one('SELECT * FROM entries WHERE id=?', params.id), 'Wpis');
+    need(user, one('SELECT site_id FROM networks WHERE id=?', e.network_id).site_id, 'reader');
+    return histRows('entry_id=? OR (network_id=? AND ip=?)', e.id, e.network_id, e.ip);
+  });
+  route('GET', '/api/networks/:id/history', ({ params, query, user }) => {
+    const n = must(one('SELECT * FROM networks WHERE id=?', params.id), 'Sieć');
+    need(user, n.site_id, 'reader');
+    return query.ip ? histRows('network_id=? AND ip=?', n.id, str(query.ip, 15)) : histRows('network_id=?', n.id);
   });
 
   route('GET', '/api/search', ({ query, user }) => {
@@ -359,15 +420,17 @@ export function createApi(db, opts = {}) {
       rows.slice(1).forEach((r, i) => {
         const obj = Object.fromEntries(head.map((h, j) => [h, r[j] ?? '']));
         try {
-          const existing = one('SELECT id FROM entries WHERE network_id=? AND ip=?', net.id, str(obj.ip, 15));
+          const existing = one('SELECT * FROM entries WHERE network_id=? AND ip=?', net.id, str(obj.ip, 15));
           const e = entryInput(obj, net, existing?.id);
           if (existing) {
             run(`UPDATE entries SET fqdn=?, mac=?, type=?, status=?, tags=?, description=?, updated_at=datetime('now') WHERE id=?`,
               e.fqdn, e.mac, e.type, e.status, e.tags, e.description, existing.id);
+            hist(net.id, existing.id, e.ip, 'update', diff(existing, e));
             updated++;
           } else {
-            run(`INSERT INTO entries (network_id, ip, ip_num, fqdn, mac, type, status, tags, description) VALUES (?,?,?,?,?,?,?,?,?)`,
+            const ins = run(`INSERT INTO entries (network_id, ip, ip_num, fqdn, mac, type, status, tags, description) VALUES (?,?,?,?,?,?,?,?,?)`,
               net.id, e.ip, e.ip_num, e.fqdn, e.mac, e.type, e.status, e.tags, e.description);
+            hist(net.id, Number(ins.lastInsertRowid), e.ip, 'create', snapshot(e, 'new'));
             added++;
           }
         } catch (err) { errors.push(`Wiersz ${i + 2}: ${err.message}`); }
@@ -401,7 +464,7 @@ export function createApi(db, opts = {}) {
     const rows = all(`SELECT * FROM entries WHERE network_id=? AND id IN (${ids.map(() => '?').join(',')})`, net.id, ...ids);
     if (body.action === 'delete') {
       db.exec('BEGIN');
-      try { for (const r of rows) run('DELETE FROM entries WHERE id=?', r.id); db.exec('COMMIT'); } catch (e) { db.exec('ROLLBACK'); throw e; }
+      try { for (const r of rows) { hist(net.id, r.id, r.ip, 'delete', snapshot(r, 'old')); run('DELETE FROM entries WHERE id=?', r.id); } db.exec('COMMIT'); } catch (e) { db.exec('ROLLBACK'); throw e; }
       log('delete', 'entry', `${net.name}: ${rows.length} wpisów (zbiorczo)`);
       return { affected: rows.length };
     }
@@ -414,6 +477,7 @@ export function createApi(db, opts = {}) {
     try {
       for (const r of rows) {
         const tags = [...new Set([...r.tags.split(',').filter(Boolean), ...addTags])].join(',');
+        hist(net.id, r.id, r.ip, 'update', diff(r, { ...r, type: c.type ?? r.type, status: c.status ?? r.status, tags }));
         run("UPDATE entries SET type=?, status=?, tags=?, updated_at=datetime('now') WHERE id=?", c.type ?? r.type, c.status ?? r.status, tags, r.id);
       }
       db.exec('COMMIT');
@@ -451,6 +515,7 @@ export function createApi(db, opts = {}) {
       for (const r of rows) if (r[key]) m.set(r[key], [...(m.get(r[key]) ?? []), r]);
       return [...m].filter(([, v]) => v.length > 1);
     };
+    for (const e of entries.filter(macAlert)) issues.push({ level: 'error', text: `${e.ip} (${e.fqdn || 'bez nazwy'}): skan widzi MAC ${e.seen_mac}, a wpis ma ${e.mac} — urządzenie wymienione albo adres przejęty?` });
     for (const [mac, rows] of group(entries, 'mac')) {
       issues.push({ level: 'error', text: `Duplikat MAC ${mac}: ${rows.map((r) => r.ip).join(', ')}` });
     }

@@ -299,7 +299,7 @@ test('bulk update/delete', async () => {
 test('scan records last_seen and discovered hosts; scheduler only scans auto_scan networks', async () => {
   const alive = new Set(['10.0.0.2', '10.0.0.9']);
   const pinged = [];
-  const api = createApi(openDb(':memory:'), { ping: async (ip) => { pinged.push(ip); return alive.has(ip); } });
+  const api = createApi(openDb(':memory:'), { ping: async (ip) => { pinged.push(ip); return alive.has(ip); }, neighbors: async () => new Map() });
   const admin = client(api);
   await admin.register('admin');
   const site = await mkSite(admin, 'dom1');
@@ -308,7 +308,7 @@ test('scan records last_seen and discovered hosts; scheduler only scans auto_sca
   await admin('POST', `/api/networks/${manual.id}/entries`, { ip: '10.0.0.2', fqdn: 'known.lan' });
 
   const res = await admin('POST', `/api/networks/${manual.id}/scan`);
-  assert.deepEqual(res.alive, [{ ip: '10.0.0.2', known: true }, { ip: '10.0.0.9', known: false }]);
+  assert.deepEqual(res.alive, [{ ip: '10.0.0.2', known: true, mac: '' }, { ip: '10.0.0.9', known: false, mac: '' }]);
   const full = await admin('GET', `/api/networks/${manual.id}`);
   assert.ok(full.entries[0].last_seen);
   assert.equal(full.stats.new_hosts, 1);
