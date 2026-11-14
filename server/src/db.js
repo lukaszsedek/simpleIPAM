@@ -178,6 +178,9 @@ function openRaw(path) {
     if (!db.prepare(`PRAGMA table_info(${table})`).all().some((c) => c.name === col)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${col} ${ddl}`);
   };
   addColumn('entries', 'last_seen', 'TEXT');
+  addColumn('sites', 'unifi_host', "TEXT NOT NULL DEFAULT ''");   // UniFi console / Integration-API site this site was imported from
+  addColumn('sites', 'unifi_site', "TEXT NOT NULL DEFAULT ''");
+  addColumn('sites', 'unifi_site_name', "TEXT NOT NULL DEFAULT ''");
   addColumn('entries', 'alias', "TEXT NOT NULL DEFAULT ''");        // friendly device name (mirrors the UniFi client alias)
   addColumn('entries', 'unifi_name', "TEXT NOT NULL DEFAULT ''");    // alias as last seen in UniFi: the base for detecting who changed it
   addColumn('entries', 'seen_mac', "TEXT NOT NULL DEFAULT ''");   // MAC last observed by a scan

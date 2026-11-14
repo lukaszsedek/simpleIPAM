@@ -352,6 +352,7 @@ export function createApi(db, opts = {}) {
       updated_at=datetime('now') WHERE id=?`, e.ip, e.ip_num, e.fqdn, e.alias, e.mac, e.type, e.status, e.tags, e.description, old.id);
     hist(old.network_id, old.id, e.ip, 'update', diff(old, e));
     log('update', 'entry', `${e.ip} ${e.fqdn}`.trim());
+    if (e.alias !== old.alias) pushAliasSoon(old.id);
     return { id: old.id, network_id: old.network_id, ...e };
   }));
   route('DELETE', '/api/entries/:id', ({ params, user }) => {
@@ -987,7 +988,7 @@ export function createApi(db, opts = {}) {
   // One-way: UniFi -> simpleIPAM. Networks are created (or have blanks filled) per console/site, static clients become entries,
   // clients inside the DHCP pool land in "discovered" (or become entries when import_dhcp is on), and the MACs UniFi reports
   // feed the same MAC-change detection as scans.
-  const UNIFI_DEFAULTS = { api_key: '', consoles: [], tenant_id: null, import_dhcp: false, auto_sync: false };
+  const UNIFI_DEFAULTS = { api_key: '', consoles: [], tenant_id: null, import_dhcp: false, auto_sync: false, push_aliases: false, write_verified: false };
   const unifiCfg = () => {
     let c = {};
     try { c = JSON.parse(one("SELECT value FROM settings WHERE key='unifi'")?.value ?? '{}'); } catch { /* unset */ }
@@ -1011,6 +1012,10 @@ export function createApi(db, opts = {}) {
     }
     if (body.import_dhcp !== undefined) c.import_dhcp = !!body.import_dhcp;
     if (body.auto_sync !== undefined) c.auto_sync = !!body.auto_sync;
+    if (body.push_aliases !== undefined) {
+      if (body.push_aliases && !c.write_verified) throw bad('Najpierw wyślij aliasy ręcznie („Wyślij aliasy do UniFi”) — automat włączysz po pierwszym udanym zapisie');
+      c.push_aliases = !!body.push_aliases;
+    }
     if (Array.isArray(body.consoles)) {
       const on = new Set(body.consoles.filter((x) => x.enabled).map((x) => String(x.id)));
       c.consoles = c.consoles.map((x) => ({ ...x, enabled: on.has(x.id) }));
@@ -1031,6 +1036,67 @@ export function createApi(db, opts = {}) {
       return unifiPublic(c);
     } catch (e) { uFail(e); }
   });
+
+
+  // ---------- aliases: simpleIPAM -> UniFi ----------
+  // Client aliases can only be written through the classic Network API (`rest/user`), addressed by MAC. Only clients UniFi already
+  // knows are renamed (none are created), an emptied alias never clears the name in UniFi, and writes are capped per run
+  // (the connector allows 100 requests/min per console).
+  const PUSH_CAP = 40;
+  async function unifiPushSite(c, siteRow, { dry = false, entryId = null } = {}) {
+    const out = { site: siteRow.name, planned: [], pushed: 0, skipped: [], errors: [] };
+    const where = entryId ? 'AND e.id=?' : '';
+    const cands = all(`SELECT e.* FROM entries e JOIN networks n ON n.id=e.network_id
+      WHERE n.site_id=? AND e.alias!='' AND e.mac!='' AND e.alias!=e.unifi_name ${where} ORDER BY e.ip_num`, ...(entryId ? [siteRow.id, entryId] : [siteRow.id]));
+    if (!cands.length) return out;
+    try {
+      const siteName = await unifi.classicSiteName(c, siteRow.unifi_host, { internalReference: siteRow.unifi_site, name: siteRow.unifi_site_name }, uDeps());
+      const known = await unifi.knownClients(c, siteRow.unifi_host, siteName, uDeps());
+      for (const e of cands) {
+        const k = known.get(e.mac.toLowerCase());
+        if (!k) { out.skipped.push({ ip: e.ip, reason: 'UniFi nie zna tego klienta (brak go na liście znanych urządzeń)' }); continue; }
+        if (k.name === e.alias) { if (!dry) run('UPDATE entries SET unifi_name=? WHERE id=?', e.alias, e.id); continue; }   // already the same
+        out.planned.push({ ip: e.ip, mac: e.mac, from: k.name, to: e.alias });
+        if (dry) continue;
+        if (out.pushed >= PUSH_CAP) { out.skipped.push({ ip: e.ip, reason: 'limit zapisów na jedno uruchomienie — reszta przy następnej synchronizacji' }); continue; }
+        await unifi.setClientName(c, siteRow.unifi_host, siteName, k.id, e.alias, uDeps());
+        run('UPDATE entries SET unifi_name=? WHERE id=?', e.alias, e.id);
+        hist(e.network_id, e.id, e.ip, 'pushed', { alias: [k.name, e.alias] }, 'unifi');
+        out.pushed++;
+      }
+    } catch (err) { out.errors.push(err.message); }
+    return out;
+  }
+
+  async function unifiPush({ dry = false } = {}) {
+    const c = unifiCfg();
+    if (!c.api_key) throw bad('Najpierw zapisz klucz API');
+    const hosts = new Set(c.consoles.filter((x) => x.enabled).map((x) => x.id));
+    const sites = all("SELECT * FROM sites WHERE unifi_host!=''").filter((s) => hosts.has(s.unifi_host));
+    if (!sites.length) throw bad('Brak lokalizacji zaimportowanych z UniFi — najpierw wykonaj synchronizację');
+    const results = [];
+    for (const s of sites) results.push(await unifiPushSite(c, s, { dry }));
+    const pushed = results.reduce((n, r) => n + r.pushed, 0);
+    if (!dry && pushed > 0 && !c.write_verified) { c.write_verified = true; saveSetting('unifi', c); }
+    return { at: new Date().toISOString(), dry, ok: results.every((r) => !r.errors.length), pushed, results };
+  }
+  route('POST', '/api/admin/unifi/push', async ({ body, user, ctx }) => {
+    needGlobalAdmin(user); sessionOnly(ctx);
+    actor = user.username;
+    try {
+      const r = await unifiPush({ dry: !!body.dry_run });
+      if (!r.dry && r.pushed) { actor = user.username; log('update', 'settings', `aliasy wysłane do UniFi: ${r.pushed}`); }
+      return r;
+    } catch (e) { uFail(e); }
+  });
+  // An alias saved in simpleIPAM reaches UniFi right away when automatic push is on (failures are retried by the hourly sync).
+  const pushAliasSoon = (entryId) => {
+    const c = unifiCfg();
+    if (!c.push_aliases || !c.write_verified || !c.api_key) return;
+    const e = one('SELECT e.id, n.site_id FROM entries e JOIN networks n ON n.id=e.network_id WHERE e.id=?', entryId);
+    const site = e && one("SELECT * FROM sites WHERE id=? AND unifi_host!=''", e.site_id);
+    if (site) setImmediate(() => unifiPushSite(c, site, { entryId }).catch(() => {}));
+  };
 
   // Before any write-back is built: can this API key even reach the classic Network API (where client aliases live)?
   route('POST', '/api/admin/unifi/diagnose', async ({ user, ctx }) => {
@@ -1077,6 +1143,7 @@ export function createApi(db, opts = {}) {
         ipamSite = { id: Number(r.lastInsertRowid) };
         log('create', 'site', `${siteName} (UniFi)`);
       }
+      if (ipamSite && !dry) run('UPDATE sites SET unifi_host=?, unifi_site=?, unifi_site_name=? WHERE id=?', fetched.con.id, String(site.internalReference ?? ''), String(site.name ?? ''), ipamSite.id);
       const known = ipamSite ? all('SELECT * FROM networks WHERE site_id=?', ipamSite.id) : [];
       for (const { raw, n } of nets) {
         if (!n) { sum.networks.skipped++; continue; }                          // no gateway-managed IPv4 subnet
@@ -1152,7 +1219,9 @@ export function createApi(db, opts = {}) {
       try { results.push(unifiApply(c, fetched, dry)); db.exec(dry ? 'ROLLBACK' : 'COMMIT'); }
       catch (e) { db.exec('ROLLBACK'); results.push({ console: con.name, sites: 0, networks: {}, entries: {}, errors: [e.message] }); }
     }
-    const last = { at: new Date().toISOString(), dry, ok: results.every((r) => !r.errors.length), results };
+    let pushed = null;
+    if (!dry && c.push_aliases && c.write_verified) pushed = await unifiPush().catch((e) => ({ ok: false, pushed: 0, results: [{ site: '', errors: [e.message], planned: [], skipped: [], pushed: 0 }] }));
+    const last = { at: new Date().toISOString(), dry, ok: results.every((r) => !r.errors.length) && (pushed?.ok ?? true), results, ...(pushed ? { push: pushed } : {}) };
     if (!dry) saveSetting('unifi_last', last);
     return last;
   }

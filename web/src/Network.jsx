@@ -92,7 +92,7 @@ function ScanModal({ net, onClose, onAdd }) {
 
 const FIELD_LABELS = { ip: 'IP', fqdn: 'FQDN', alias: 'Alias', mac: 'MAC', type: 'Typ', status: 'Status', tags: 'Tagi', description: 'Opis' };
 const show = (k, v) => (v === '' || v == null ? '∅' : k === 'type' ? TYPE_LABELS[v] ?? v : k === 'status' ? STATUS_LABELS[v] ?? v : v);
-const ACTIONS = { create: 'dodano', update: 'zmieniono', delete: 'usunięto', mac_seen: 'zauważył inny MAC', mac_ignored: 'zignorowano MAC' };
+const ACTIONS = { create: 'dodano', update: 'zmieniono', delete: 'usunięto', mac_seen: 'zauważył inny MAC', mac_ignored: 'zignorowano MAC', pushed: 'wysłano alias do UniFi' };
 
 // Change log of one entry (or, without `entry`, of the whole network).
 function HistoryModal({ net, entry, onClose }) {

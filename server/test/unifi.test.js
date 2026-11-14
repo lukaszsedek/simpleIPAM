@@ -6,7 +6,7 @@ import { toNetwork, toClient, hostnameOf, findKey } from '../src/unifi.js';
 
 // Fake api.ui.com: one console with one site, a gateway-managed LAN with a DHCP pool, and a few clients.
 function fakeUbiquiti() {
-  const f = { calls: [], clients: [], keyOk: true };
+  const f = { calls: [], clients: [], keyOk: true, known: [], puts: [], classicDown: false };
   const page = (data) => ({ ok: true, status: 200, json: async () => ({ data, offset: 0, limit: 200, count: data.length, totalCount: data.length }), text: async () => '' });
   const net = (over = {}) => ({ id: 'n1', name: 'LAN', vlanId: 1, enabled: true, management: 'GATEWAY',
     ipv4Configuration: { hostIpAddress: '192.168.1.1', prefixLength: 24, dhcpConfiguration: { mode: 'SERVER', ipAddressRange: { start: '192.168.1.100', stop: '192.168.1.199' }, dnsServerIpAddressesOverride: ['1.1.1.1', '9.9.9.9'] } }, ...over });
@@ -17,8 +17,17 @@ function fakeUbiquiti() {
     assert.equal(u.host, 'api.ui.com');
     if (!f.keyOk || init.headers['x-api-key'] !== 'KEY') return { ok: false, status: 401, text: async () => '', json: async () => ({}) };
     if (u.pathname === '/v1/hosts') return { ok: true, status: 200, json: async () => ({ data: [{ id: 'host1', type: 'console', ipAddress: '1.2.3.4', reportedState: { name: 'Cloud Gateway Fiber' } }, { id: 'host2', reportedState: { hostname: 'UDM7' } }] }) };
+    const cbase = '/v1/connector/consoles/host1/proxy/network/api';
+    if (u.pathname.startsWith(cbase)) {                       // classic API (aliases)
+      if (f.classicDown) return { ok: false, status: 403, text: async () => '', json: async () => ({}) };
+      const reply = (data) => ({ ok: true, status: 200, json: async () => ({ meta: { rc: 'ok' }, data }), text: async () => '' });
+      if (u.pathname === `${cbase}/self/sites`) return reply([{ name: 'default', desc: 'Default' }]);
+      if (u.pathname === `${cbase}/s/default/rest/user` && (init.method ?? 'GET') === 'GET') return reply(f.known);
+      const m = u.pathname.match(/\/s\/default\/rest\/user\/(\w+)$/);
+      if (m && init.method === 'PUT') { const body = JSON.parse(init.body); f.puts.push({ id: m[1], ...body }); const k = f.known.find((x) => x._id === m[1]); if (k) k.name = body.name; return reply([{}]); }
+    }
     const base = '/v1/connector/consoles/host1/proxy/network/integration/v1';
-    if (u.pathname === `${base}/sites`) return page([{ id: 's1', name: 'Default' }]);
+    if (u.pathname === `${base}/sites`) return page([{ id: 's1', name: 'Default', internalReference: 'default' }]);
     if (u.pathname === `${base}/sites/s1/networks`) return page(f.networks);
     if (u.pathname === `${base}/sites/s1/clients`) return page(f.clients);
     return { ok: false, status: 404, text: async () => '', json: async () => ({}) };
@@ -200,6 +209,72 @@ test('diagnose probes the integration and classic APIs with GET only and reports
   assert.deepEqual([a.ok, a.status, a.count], [true, 200, 1]);
   assert.deepEqual([b.ok, b.status], [false, 401]);
   assert.deepEqual([...new Set(methods)], ['GET']);
-  const r = await call('POST', '/api/admin/unifi/diagnose');          // route wiring (fake answers 404 for the classic path)
-  assert.deepEqual([r.results[0].console, r.results[0].integration.ok, r.results[0].legacy.status], ['Cloud Gateway Fiber', true, 404]);
+  const r = await call('POST', '/api/admin/unifi/diagnose');          // route wiring (fake serves the classic path now)
+  assert.deepEqual([r.results[0].console, r.results[0].integration.ok, r.results[0].legacy.status], ['Cloud Gateway Fiber', true, 200]);
+});
+
+test('alias push: preview, first manual write verifies, then edits flow to UniFi automatically', async () => {
+  const ctx = await setup(); const { call, f } = ctx;
+  await connect(ctx);
+  f.clients = [{ id: 'c1', name: 'nas', type: 'WIRED', ipAddress: '192.168.1.10', macAddress: 'aa:bb:cc:00:00:10' },
+    { id: 'c2', name: 'tv', type: 'WIRED', ipAddress: '192.168.1.11', macAddress: 'aa:bb:cc:00:00:11' }];
+  f.known = [{ _id: 'u1', mac: 'aa:bb:cc:00:00:10', name: 'nas' }, { _id: 'u2', mac: 'aa:bb:cc:00:00:11', name: 'tv' }];
+  await assert.rejects(call('POST', '/api/admin/unifi/push'), /synchronizację/);            // nothing imported yet
+  await call('POST', '/api/admin/unifi/sync');
+  const net = (await call('GET', '/api/overview'))[0].sites[0].networks[0];
+  const entries = async () => (await call('GET', `/api/networks/${net.id}`)).entries;
+  const nas = (await entries()).find((e) => e.ip === '192.168.1.10');
+
+  // automatic push cannot be switched on before a verified manual write
+  await assert.rejects(call('PUT', '/api/admin/unifi', { push_aliases: true }), /ręcznie/);
+
+  await call('PUT', `/api/entries/${nas.id}`, { ...nas, alias: 'NAS Salon' });           // edited in simpleIPAM
+  assert.equal(f.puts.length, 0);                                                            // automation is off: nothing sent
+  const dry = await call('POST', '/api/admin/unifi/push', { dry_run: true });
+  assert.deepEqual(dry.results[0].planned, [{ ip: '192.168.1.10', mac: 'aa:bb:cc:00:00:10', from: 'nas', to: 'NAS Salon' }]);
+  assert.deepEqual([dry.pushed, f.puts.length], [0, 0]);                                     // preview wrote nothing
+
+  const r = await call('POST', '/api/admin/unifi/push');
+  assert.deepEqual([r.ok, r.pushed, f.puts], [true, 1, [{ id: 'u1', name: 'NAS Salon' }]]);
+  assert.equal((await entries()).find((e) => e.id === nas.id).unifi_name, 'NAS Salon');
+  assert.equal((await call('GET', `/api/entries/${nas.id}/history`))[0].action, 'pushed');
+  assert.equal((await call('POST', '/api/admin/unifi/push')).pushed, 0);                     // idempotent
+  assert.equal((await call('GET', '/api/admin/unifi')).write_verified, true);
+
+  // now automation may be enabled: an alias saved in simpleIPAM goes out immediately
+  await call('PUT', '/api/admin/unifi', { push_aliases: true });
+  await call('PUT', `/api/entries/${nas.id}`, { ...nas, alias: 'NAS Garaż' });
+  await new Promise((r) => setTimeout(r, 30));
+  assert.deepEqual(f.puts.at(-1), { id: 'u1', name: 'NAS Garaż' });
+
+  // ...and a rename made in UniFi still flows the other way during sync, without being pushed back
+  f.clients[1].name = 'Telewizor'; f.known[1].name = 'Telewizor';
+  const before = f.puts.length;
+  const sync = await call('POST', '/api/admin/unifi/sync');
+  assert.equal((await entries()).find((e) => e.ip === '192.168.1.11').alias, 'Telewizor');
+  assert.equal(f.puts.length, before);
+  assert.equal(sync.push.pushed, 0);
+});
+
+test('alias push is careful: unknown clients are skipped, emptied alias never clears UniFi, failures are reported', async () => {
+  const ctx = await setup(); const { call, f } = ctx;
+  await connect(ctx);
+  f.clients = [{ id: 'c1', name: 'nas', type: 'WIRED', ipAddress: '192.168.1.10', macAddress: 'aa:bb:cc:00:00:10' },
+    { id: 'c2', name: 'cam', type: 'WIRED', ipAddress: '192.168.1.12', macAddress: 'aa:bb:cc:00:00:12' }];
+  f.known = [{ _id: 'u1', mac: 'aa:bb:cc:00:00:10', name: 'nas' }];                           // cam is not a "known" client
+  await call('POST', '/api/admin/unifi/sync');
+  const net = (await call('GET', '/api/overview'))[0].sites[0].networks[0];
+  const es = (await call('GET', `/api/networks/${net.id}`)).entries;
+  const [nas, cam] = [es.find((e) => e.ip.endsWith('.10')), es.find((e) => e.ip.endsWith('.12'))];
+  await call('PUT', `/api/entries/${cam.id}`, { ...cam, alias: 'Kamera' });
+  await call('PUT', `/api/entries/${nas.id}`, { ...nas, alias: '' });                    // cleared in simpleIPAM
+  const r = await call('POST', '/api/admin/unifi/push');
+  assert.deepEqual([r.pushed, f.puts.length], [0, 0]);
+  assert.match(r.results[0].skipped[0].reason, /nie zna/);
+  f.known.push({ _id: 'u3', mac: 'aa:bb:cc:00:00:12', name: 'cam' });
+  f.classicDown = true;
+  const bad = await call('POST', '/api/admin/unifi/push');
+  assert.equal(bad.ok, false);
+  assert.match(bad.results[0].errors[0], /401\/403/);
+  assert.equal((await call('GET', '/api/admin/unifi')).write_verified, false);                // a failed write never verifies
 });

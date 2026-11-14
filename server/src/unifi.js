@@ -10,9 +10,16 @@ const BASE = 'https://api.ui.com';
 export class UnifiError extends Error {}
 const short = (s) => String(s).replace(/\s+/g, ' ').slice(0, 200);
 
-async function get(cfg, path, { fetch = globalThis.fetch } = {}) {
+const get = (cfg, path, deps) => request(cfg, 'GET', path, undefined, deps);
+
+async function request(cfg, method, path, body, { fetch = globalThis.fetch } = {}) {
   let res;
-  try { res = await fetch(`${BASE}${path}`, { headers: { 'x-api-key': cfg.api_key, accept: 'application/json' }, signal: AbortSignal.timeout(30_000) }); }
+  try {
+    res = await fetch(`${BASE}${path}`, {
+      method, headers: { 'x-api-key': cfg.api_key, accept: 'application/json', ...(body ? { 'content-type': 'application/json' } : {}) },
+      body: body ? JSON.stringify(body) : undefined, signal: AbortSignal.timeout(30_000),
+    });
+  }
   catch (e) { throw new UnifiError(`Brak połączenia z api.ui.com: ${short(e.message)}`); }
   if (res.status === 401 || res.status === 403) throw new UnifiError('Klucz API odrzucony (401/403). Klucz musi pochodzić z unifi.ui.com i należeć do właściciela konsoli');
   if (res.status === 429) throw new UnifiError('Limit zapytań Ubiquiti (100/min na konsolę) — spróbuj za chwilę');
@@ -105,3 +112,31 @@ export async function probe(cfg, host, path, { fetch = globalThis.fetch } = {}) 
     return { status: res.status, ok: res.ok, count: Array.isArray(body?.data) ? body.data.length : null };
   } catch (e) { return { status: 0, ok: false, count: null, error: short(e.message) }; }
 }
+
+// ---------- classic Network API (client aliases live here; the Integration API cannot rename clients) ----------
+const classicPath = (host, p) => `/v1/connector/consoles/${encodeURIComponent(host)}/proxy/network/api${p}`;
+async function classic(cfg, host, method, p, body, deps) {
+  const j = await request(cfg, method, classicPath(host, p), body, deps);
+  if (j?.meta && j.meta.rc !== 'ok') throw new UnifiError(`UniFi: ${short(j.meta.msg ?? 'błąd')}`);
+  return j;
+}
+
+// The classic API addresses a site by its internal name ("default"), not by the Integration API's UUID.
+export async function classicSiteName(cfg, host, site, deps) {
+  const list = rows(await classic(cfg, host, 'GET', '/self/sites', undefined, deps));
+  const hit = list.find((x) => x.name === site.internalReference) ?? list.find((x) => x.desc === site.name) ?? (list.length === 1 ? list[0] : null);
+  if (!hit) throw new UnifiError(`Nie dopasowano lokalizacji „${site.name}” w klasycznym API`);
+  return hit.name;
+}
+
+// Known clients of a site, by MAC: { _id, name }.
+export async function knownClients(cfg, host, siteName, deps) {
+  const map = new Map();
+  for (const c of rows(await classic(cfg, host, 'GET', `/s/${encodeURIComponent(siteName)}/rest/user`, undefined, deps))) {
+    if (c?.mac && c._id) map.set(String(c.mac).toLowerCase(), { id: c._id, name: String(c.name ?? '') });
+  }
+  return map;
+}
+
+export const setClientName = (cfg, host, siteName, id, name, deps) =>
+  classic(cfg, host, 'PUT', `/s/${encodeURIComponent(siteName)}/rest/user/${encodeURIComponent(id)}`, { name }, deps);

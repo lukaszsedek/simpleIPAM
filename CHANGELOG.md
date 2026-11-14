@@ -5,6 +5,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+### Added
+- Aliases now flow both ways with UniFi. simpleIPAM → UniFi: "Wyślij aliasy do UniFi" (with a preview) renames known UniFi clients by MAC through the classic Network API; after the first successful write an admin can switch on automatic push, which sends an alias right after it is saved in simpleIPAM and again on every sync. Safeguards: only clients UniFi already knows are renamed, an emptied alias never clears a name in UniFi, at most 40 writes per run, and a failed write never marks the feature as verified.
+
 ## [0.4.2] - 2026-11-14
 
 ### Changed

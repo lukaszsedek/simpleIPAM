@@ -80,6 +80,7 @@ function Unifi({ tenants, notify }) {
   const [busy, setBusy] = useState('');
   const [res, setRes] = useState(null);
   const [diag, setDiag] = useState(null);
+  const [push, setPush] = useState(null);   // result of a preview or a real push
   useEffect(() => { api.unifi().then((r) => { setC(r); setRes(r.last); }).catch((e) => notify(e.message, 'error')); }, []);
   if (!c) return null;
   const act = async (name, fn, done) => {
@@ -119,9 +120,12 @@ function Unifi({ tenants, notify }) {
               </select></Field>
           </div>
           <label class="toggle"><input type="checkbox" checked={c.import_dhcp} onChange={(e) => patch({ import_dhcp: e.target.checked })} /> Klienci z puli DHCP też jako wpisy (domyślnie trafiają do „nowych urządzeń”)</label>
+          <label class="toggle"><input type="checkbox" checked={c.push_aliases} disabled={!c.write_verified} onChange={(e) => patch({ push_aliases: e.target.checked })} /> Wysyłaj aliasy z IPAM do UniFi automatycznie (zaraz po zapisie i przy każdej synchronizacji){!c.write_verified && <span class="muted small-text"> — dostępne po pierwszym udanym ręcznym wysłaniu</span>}</label>
           <label class="toggle"><input type="checkbox" checked={c.auto_sync} onChange={(e) => patch({ auto_sync: e.target.checked })} /> Synchronizuj automatycznie co godzinę</label>
           <div class="form-actions">
             <button class="btn ghost" disabled={!ready || !!busy} onClick={() => act('diag', api.unifiDiagnose, setDiag)} title="Tylko odczyt — sprawdza, czy klucz dosięga klasycznego API, gdzie UniFi trzyma aliasy klientów">{busy === 'diag' ? 'Sprawdzam…' : 'Sprawdź zapis do UniFi'}</button>
+            <button class="btn ghost" disabled={!ready || !!busy} onClick={() => act('pushdry', () => api.unifiPush(true), setPush)} title="Pokazuje, które aliasy zostałyby zmienione w UniFi — niczego nie zapisuje">{busy === 'pushdry' ? 'Liczę…' : 'Podgląd wysyłki aliasów'}</button>
+            <button class="btn ghost" disabled={!ready || !!busy} onClick={() => confirm('Zapisać aliasy z IPAM w kontrolerze UniFi? Zmieni to nazwy klientów w UniFi.') && act('push', () => api.unifiPush(false), (r) => { setPush(r); api.unifi().then(setC); notify(r.ok ? `Wysłano aliasów: ${r.pushed}` : 'Wysyłka z błędami', r.ok ? 'ok' : 'error'); })}>{busy === 'push' ? 'Wysyłam…' : 'Wyślij aliasy do UniFi'}</button>
             <button class="btn ghost" disabled={!ready || !!busy} onClick={() => sync(true)}>{busy === 'dry' ? 'Liczę…' : 'Podgląd'}</button>
             <button class="btn primary" disabled={!ready || !!busy} onClick={() => sync(false)}>{busy === 'sync' ? 'Synchronizuję…' : 'Synchronizuj teraz'}</button>
           </div>
@@ -135,6 +139,20 @@ function Unifi({ tenants, notify }) {
               <b>{d.console}</b>: Integration API {d.integration.ok ? '✔ działa' : `✖ ${d.integration.status || d.integration.error}`} · klasyczne API (aliasy) {d.legacy.ok ? '✔ odczyt działa' : `✖ ${d.legacy.status || d.legacy.error}`}
               {!d.legacy.ok && d.legacy.status > 0 && <div class="muted">Ten klucz nie ma dostępu do klasycznego API — zapisu aliasów z IPAM do UniFi nie da się nim zrobić.</div>}
               {d.legacy.ok && <div class="muted">Odczyt działa, więc zapis aliasów jest prawdopodobnie możliwy; potwierdzi to dopiero faktyczna próba zapisu.</div>}
+            </div>
+          ))}
+        </div>
+      )}
+      {push && (
+        <div class={`last-run ${push.ok ? 'ok' : 'bad'}`}>
+          <div><b>{push.dry ? 'Podgląd wysyłki aliasów (nic nie zapisano)' : 'Wysyłka aliasów do UniFi'}</b> · {when(push.at)}{!push.dry && ` · wysłano ${push.pushed}`}</div>
+          {push.results.map((r) => (
+            <div class="small-text">
+              <b>{r.site}</b>
+              {r.planned.map((p) => <div class="diff-line"><span class="mono">{p.ip}</span> <s>{p.from || '∅'}</s> → <b>{p.to}</b></div>)}
+              {r.skipped.map((p) => <div class="muted"><span class="mono">{p.ip}</span> pominięto: {p.reason}</div>)}
+              {r.errors.map((e) => <div class="error-text">{e}</div>)}
+              {!r.planned.length && !r.skipped.length && !r.errors.length && <div class="muted">Wszystkie aliasy są już zgodne.</div>}
             </div>
           ))}
         </div>
