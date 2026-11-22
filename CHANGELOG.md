@@ -4,6 +4,8 @@ All notable changes to simpleIPAM are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
+
+## [0.19.1] - 2026-11-22
 ### Fixed
 - Entry-table checkboxes were misaligned since 0.19.0 (a new `.check` class clashed with the table cell class).
 
