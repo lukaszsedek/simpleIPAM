@@ -27,6 +27,7 @@ let user = db.prepare('SELECT id FROM users WHERE username = ?').get(username);
 if (user) auth.setPassword(user.id, password);
 else user = { id: auth.register(username, password).id };
 auth.dropSessions(user.id);
+auth.totpReset(user.id);                       // a lost authenticator must never lock the admin out
 db.prepare('DELETE FROM role_assignments WHERE user_id = ? AND tenant_id IS NULL AND site_id IS NULL').run(user.id);
 db.prepare("INSERT INTO role_assignments (user_id, role) VALUES (?, 'admin')").run(user.id);
 console.log(`OK: ${username} is global Admin. ${given ? '' : `Password: ${password}`}`);

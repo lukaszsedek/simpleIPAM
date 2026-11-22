@@ -5,6 +5,7 @@ import { Network } from './Network.jsx';
 import { Admin } from './Admin.jsx';
 import { Issues } from './Issues.jsx';
 import { Planner } from './Planner.jsx';
+import qrcode from 'qrcode-generator';
 import { AuthScreen } from './Auth.jsx';
 // `tx`, not `t`: tenants are called `t` all over this file.
 import { t as tx, useLang, setLang, getLang, LANGS } from './i18n.js';
@@ -172,6 +173,58 @@ function PasswordForm({ onClose, notify, me, googleReady }) {
   );
 }
 
+// Two-factor sign-in: scan the QR in an authenticator app, confirm with a code, keep the one-time recovery codes.
+function TotpForm({ me, onClose, notify, onChanged }) {
+  const [setup, setSetup] = useState(null);
+  const [code, setCode] = useState('');
+  const [pw, setPw] = useState('');
+  const [codes, setCodes] = useState(null);
+  const qr = useMemo(() => {
+    if (!setup) return '';
+    const q = qrcode(0, 'M'); q.addData(setup.uri); q.make();
+    return q.createSvgTag({ cellSize: 1, margin: 2, scalable: true });
+  }, [setup]);
+  const start = async () => { try { setSetup(await api.totpSetup()); } catch (e) { notify(e.message, 'error'); } };
+  const enable = async (e) => {
+    e.preventDefault();
+    try { setCodes((await api.totpEnable(code)).recovery_codes); setSetup(null); onChanged(); } catch (err) { notify(err.message, 'error'); }
+  };
+  const disable = async (e) => {
+    e.preventDefault();
+    try { await api.totpDisable(pw); notify('Weryfikacja dwuetapowa wyłączona'); onChanged(); onClose(); } catch (err) { notify(err.message, 'error'); }
+  };
+  return (
+    <Modal title="Weryfikacja dwuetapowa" onClose={onClose}>
+      {codes ? (
+        <div class="form-grid">
+          <p class="span">{tx('Włączone. Zapisz kody odzyskiwania w bezpiecznym miejscu — każdy działa raz i nie zobaczysz ich ponownie.')}</p>
+          <pre class="mono recovery span">{codes.join('\n')}</pre>
+          <footer><button class="btn ghost" onClick={() => navigator.clipboard?.writeText(codes.join('\n')).then(() => notify('Skopiowano'))}>{tx('Kopiuj')}</button><button class="btn primary" onClick={onClose}>{tx('Gotowe')}</button></footer>
+        </div>
+      ) : setup ? (
+        <form class="form-grid" onSubmit={enable}>
+          <p class="span muted small-text">{tx('Zeskanuj kod w aplikacji uwierzytelniającej (Google Authenticator, Authy, 1Password…) albo wpisz klucz ręcznie, a potem podaj wygenerowany kod.')}</p>
+          <span class="qr totp-qr span" role="img" aria-label={setup.secret} dangerouslySetInnerHTML={{ __html: qr }} />
+          <Field label="Klucz" span><input class="mono" readOnly value={setup.secret} onFocus={(e) => e.target.select()} /></Field>
+          <Field label="Kod z aplikacji" span><input inputmode="numeric" autocomplete="one-time-code" maxLength={7} value={code} onInput={(e) => setCode(e.target.value)} required autofocus /></Field>
+          <footer><button type="button" class="btn ghost" onClick={onClose}>{tx('Anuluj')}</button><button class="btn primary">{tx('Włącz')}</button></footer>
+        </form>
+      ) : me.totp ? (
+        <form class="form-grid" onSubmit={disable}>
+          <p class="span">{tx('Logowanie wymaga kodu z aplikacji.')} {tx('Pozostałe kody odzyskiwania:')} <b>{me.recovery_left}</b></p>
+          <Field label="Aktualne hasło" span hint="aby wyłączyć weryfikację"><input type="password" autocomplete="current-password" value={pw} onInput={(e) => setPw(e.target.value)} required /></Field>
+          <footer><button type="button" class="btn ghost" onClick={onClose}>{tx('Zamknij')}</button><button class="btn danger">{tx('Wyłącz')}</button></footer>
+        </form>
+      ) : (
+        <div class="form-grid">
+          <p class="span">{tx('Po włączeniu, oprócz hasła logowanie wymaga 6-cyfrowego kodu z aplikacji w telefonie. Zalecane, gdy IPAM jest dostępny spoza sieci domowej.')}</p>
+          <footer><button class="btn ghost" onClick={onClose}>{tx('Anuluj')}</button><button class="btn primary" onClick={start}>{tx('Skonfiguruj')}</button></footer>
+        </div>
+      )}
+    </Modal>
+  );
+}
+
 function Tokens({ onClose, notify }) {
   const [list, setList] = useState([]);
   const [name, setName] = useState('');
@@ -317,7 +370,11 @@ export function App() {
     return () => mq.removeEventListener('change', apply);
   }, [theme]);
   useEffect(() => {
-    const f = (e) => { if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); setPalette(true); } };
+    const f = (e) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); setPalette(true); return; }
+      const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(e.target?.tagName) || e.target?.isContentEditable;
+      if (e.key === '/' && !typing && !e.metaKey && !e.ctrlKey && !e.altKey) { e.preventDefault(); setPalette(true); }     // like GitHub / Gmail
+    };
     addEventListener('keydown', f);
     return () => removeEventListener('keydown', f);
   }, []);
@@ -361,7 +418,7 @@ export function App() {
       <aside class={`sidebar ${nav ? 'open' : ''}`}>
         <a class="brand" href="#/" aria-label={tx('Strona główna')}><Logo size={28} />simpleIPAM</a>
         <button class="search-trigger" onClick={() => setPalette(true)}>
-          <Icon name="search" size={16} /><span>{tx('Szukaj…')}</span><kbd>⌘K</kbd>
+          <Icon name="search" size={16} /><span>{tx('Szukaj…')}</span><kbd>/</kbd>
         </button>
         <nav>
           <a class={`side-link ${hash === '#/issues' ? 'on' : ''}`} href="#/issues"><Icon name="check" size={16} /><span>{tx('Do sprawdzenia')}</span>{issueTotal > 0 && <b class="badge warn">{issueTotal}</b>}</a>
@@ -457,6 +514,7 @@ export function App() {
                 <div class="menu-head"><b>{me.username}</b><span class={`role-badge ${me.global_role}`}>{ROLE_LABELS[me.global_role]}</span></div>
                 <button role="menuitem" onClick={() => { setMenu(false); setModal({ kind: 'tokens' }); }}><Icon name="code" size={16} />{tx('Tokeny API')}</button>
                 <button role="menuitem" onClick={() => { setMenu(false); setModal({ kind: 'pw' }); }}><Icon name="key" size={16} />{me.has_password ? tx('Zmień hasło') : tx('Hasło i konto Google')}</button>
+                <button role="menuitem" onClick={() => { setMenu(false); setModal({ kind: 'totp' }); }}><Icon name="lock" size={16} />{tx('Weryfikacja dwuetapowa')}{me.totp && <span class="chip ok">{tx('włączona')}</span>}</button>
                 <hr />
                 <button role="menuitem" class="danger" onClick={() => { setMenu(false); logout(); }}><Icon name="logout" size={16} />{tx('Wyloguj')}</button>
               </div>
@@ -520,6 +578,7 @@ export function App() {
       {modal?.kind === 'net' && <NetworkForm net={modal.net} siteId={modal.siteId} notify={notify} onClose={() => setModal(null)}
         onSaved={(n) => { setModal(null); setRev(rev + 1); reload(); notify('Zapisano'); go(`#/n/${n.id}`); }} />}
       {modal?.kind === 'tokens' && <Tokens notify={notify} onClose={() => setModal(null)} />}
+      {modal?.kind === 'totp' && <TotpForm me={me} notify={notify} onChanged={() => api.me().then((r) => setMe(r.user)).catch(() => {})} onClose={() => setModal(null)} />}
       {modal?.kind === 'pw' && <PasswordForm me={me} googleReady={googleReady} notify={notify} onClose={() => setModal(null)} />}
       {palette && <Palette sites={sites} go={go} onClose={() => setPalette(false)} />}
       <nav class="dock" aria-label="Menu">

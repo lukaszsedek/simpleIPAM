@@ -205,6 +205,10 @@ function openRaw(path) {
   addColumn('networks', 'gateway_mac', "TEXT NOT NULL DEFAULT ''");   // MAC a scan saw at the gateway address
   addColumn('networks', 'gateway_seen', 'TEXT');
   addColumn('networks', 'auto_scan', 'INTEGER NOT NULL DEFAULT 0');
+  addColumn('users', 'totp_secret', "TEXT NOT NULL DEFAULT ''");        // base32; only trusted while totp_enabled=1
+  addColumn('users', 'totp_enabled', 'INTEGER NOT NULL DEFAULT 0');
+  addColumn('users', 'totp_last', 'INTEGER NOT NULL DEFAULT 0');         // last accepted 30 s step (replay guard)
+  addColumn('users', 'totp_recovery', "TEXT NOT NULL DEFAULT '[]'");     // JSON array of sha256 hashes of unused recovery codes
   addColumn('pools', 'site_id', 'INTEGER REFERENCES sites(id) ON DELETE SET NULL');
   // Older pools floated at tenant level: hand each to the site that already holds most of its networks (else the first site).
   // The legacy `vlans` registry table is left in place, unused, so no data is lost.

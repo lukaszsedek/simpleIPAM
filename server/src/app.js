@@ -11,6 +11,7 @@ import { isEncrypted, decrypt } from './backup-crypto.js';
 import { buildOpenApi, DOCS_HTML } from './openapi.js';
 import { readNeighbors } from './neighbors.js';
 import { buildXlsx } from './xlsx.js';
+import { readXlsx } from './xlsx-read.js';
 import { lookup } from 'node:dns/promises';
 import * as unifi from './unifi.js';
 import * as azure from './azure.js';
@@ -310,6 +311,8 @@ export function createApi(db, opts = {}) {
   const CSV_COLS = ['ip', 'fqdn', 'mac', 'type', 'status', 'tags', 'description', 'alias'];
   const csvCell = (v) => /[",\n]/.test(String(v)) ? `"${String(v).replace(/"/g, '""')}"` : String(v);
   function parseCsv(text) {
+    const first = text.split(/\r?\n/, 1)[0];
+    const sep = first.includes(';') && !first.includes(',') ? ';' : ',';     // Excel in some locales saves CSV with semicolons
     const rows = []; let row = []; let cell = ''; let q = false;
     for (let i = 0; i < text.length; i++) {
       const ch = text[i];
@@ -318,7 +321,7 @@ export function createApi(db, opts = {}) {
         else if (ch === '"') q = false;
         else cell += ch;
       } else if (ch === '"') q = true;
-      else if (ch === ',') { row.push(cell); cell = ''; }
+      else if (ch === sep) { row.push(cell); cell = ''; }
       else if (ch === '\n' || ch === '\r') {
         if (ch === '\r' && text[i + 1] === '\n') i++;
         row.push(cell); cell = '';
@@ -549,11 +552,13 @@ export function createApi(db, opts = {}) {
     const sites = visibleSiteIds(user);
     if (!q || !sites.length) return [];
     const like = `%${q.replace(/[%_]/g, '')}%`;
+    const hex = q.replace(/[^0-9a-f]/g, '');                                  // aa-bb-cc, AABB.CCDD and aabbcc all find AA:BB:CC:...
+    const macLike = /^[0-9a-f:.\- ]+$/.test(q) && hex.length >= 4 ? `%${hex.match(/../g).join(':')}${hex.length % 2 ? '%' : ''}%` : like;
     return all(`SELECT e.*, n.name AS network_name, n.cidr, n.vlan, s.name AS site_name, s.id AS site_id, (SELECT name FROM tenants WHERE id=s.tenant_id) AS tenant_name
       FROM entries e JOIN networks n ON n.id=e.network_id JOIN sites s ON s.id=n.site_id
       WHERE s.id IN (${sites.join(',')})
         AND (e.ip LIKE ? OR e.fqdn LIKE ? OR e.alias LIKE ? OR e.mac LIKE ? OR e.tags LIKE ? OR e.description LIKE ?)
-      ORDER BY s.name, e.ip_num LIMIT 50`, like, like, like, like, like, like);
+      ORDER BY s.name, e.ip_num LIMIT 50`, like, like, like, macLike, like, like);
   });
 
   route('GET', '/api/audit', ({ user }) => (needGlobalAdmin(user), all('SELECT * FROM audit ORDER BY id DESC LIMIT 200')));
@@ -596,39 +601,68 @@ export function createApi(db, opts = {}) {
     const text = [CSV_COLS.join(','), ...rows.map((r) => CSV_COLS.map((c) => csvCell(r[c])).join(','))].join('\n') + '\n';
     return { raw: text, contentType: 'text/csv; charset=utf-8', filename: `${n.name.replace(/\W+/g, '_')}.csv` };
   });
-  route('POST', '/api/networks/:id/import', ({ params, body, user }) => {
-    const net = must(one('SELECT * FROM networks WHERE id=?', params.id), 'Sieć');
-    need(user, net.site_id, 'contributor');
-    const rows = parseCsv(String(body.csv ?? ''));
-    if (rows.length < 2) throw bad('Plik CSV jest pusty');
-    const head = rows[0].map((h) => h.trim().toLowerCase());
-    if (!head.includes('ip')) throw bad('Brak kolumny "ip" w nagłówku CSV');
+  // Header names (any app language, as written by the Excel export) -> entry fields.
+  const HEAD_ALIASES = {
+    ip: 'ip', fqdn: 'fqdn', host: 'fqdn', hostname: 'fqdn', alias: 'alias', mac: 'mac', typ: 'type', type: 'type', status: 'status',
+    tagi: 'tags', tags: 'tags', opis: 'description', description: 'description', beschreibung: 'description',
+    'ważny do': 'expires_at', 'valid until': 'expires_at', 'gültig bis': 'expires_at', expires_at: 'expires_at',
+  };
+  // Localised cells written by the Excel export ("Serwer", "Rezerwacja DHCP", ...) back to the stored values.
+  const LABEL_TYPE = {}, LABEL_STATUS = {};
+  for (const L of Object.values(XL)) {
+    for (const [k, v] of Object.entries(L.types)) LABEL_TYPE[v.toLowerCase()] = k;
+    for (const [k, v] of Object.entries(L.kind)) LABEL_STATUS[v.toLowerCase()] = k === 'reserved' ? 'reserved' : k === 'free' ? 'free' : 'used';
+  }
+  const IMPORT_FIELDS = ['fqdn', 'alias', 'mac', 'type', 'status', 'tags', 'description', 'expires_at'];
+  function importRows(net, table, dry) {
+    const head = table[0].map((h) => HEAD_ALIASES[String(h).trim().toLowerCase()] ?? '');
+    if (!head.includes('ip')) throw bad('Brak kolumny „ip” w nagłówku (obsługiwane: ip, fqdn, alias, mac, typ, status, tagi, opis, ważny do)');
     let added = 0, updated = 0; const errors = [];
     db.exec('BEGIN');
     try {
-      rows.slice(1).forEach((r, i) => {
-        const obj = Object.fromEntries(head.map((h, j) => [h, r[j] ?? '']));
+      table.slice(1).forEach((r, i) => {
+        const obj = {};
+        head.forEach((h, j) => { if (h && !(h in obj)) obj[h] = String(r[j] ?? '').trim(); });
+        if (!obj.ip) return;
+        if (obj.type) obj.type = LABEL_TYPE[obj.type.toLowerCase()] ?? obj.type.toLowerCase();
+        if (obj.status) obj.status = LABEL_STATUS[obj.status.toLowerCase()] ?? obj.status.toLowerCase();
+        if (/^\d{4}-\d{2}-\d{2}/.test(obj.expires_at ?? '')) obj.expires_at = obj.expires_at.slice(0, 10);
         try {
           const existing = one('SELECT * FROM entries WHERE network_id=? AND ip=?', net.id, str(obj.ip, 15));
-          const e = entryInput(obj, net, existing?.id);
+          // columns the file lacks and empty cells keep the current value: an import never wipes data
+          const given = Object.fromEntries(Object.entries(obj).filter(([, v]) => v !== ''));
+          const e = entryInput({ ...(existing ?? {}), ...given, ip: obj.ip }, net, existing?.id);
           if (existing) {
-            if (!head.includes('alias')) e.alias = existing.alias;                 // partial CSVs do not wipe it
-            run(`UPDATE entries SET fqdn=?, alias=?, mac=?, type=?, status=?, tags=?, description=?, updated_at=datetime('now') WHERE id=?`,
-              e.fqdn, e.alias, e.mac, e.type, e.status, e.tags, e.description, existing.id);
+            run(`UPDATE entries SET fqdn=?, alias=?, mac=?, type=?, status=?, tags=?, description=?, expires_at=?, updated_at=datetime('now') WHERE id=?`,
+              e.fqdn, e.alias, e.mac, e.type, e.status, e.tags, e.description, e.expires_at, existing.id);
             hist(net.id, existing.id, e.ip, 'update', diff(existing, e));
             updated++;
           } else {
-            const ins = run(`INSERT INTO entries (network_id, ip, ip_num, fqdn, alias, mac, type, status, tags, description) VALUES (?,?,?,?,?,?,?,?,?,?)`,
-              net.id, e.ip, e.ip_num, e.fqdn, e.alias, e.mac, e.type, e.status, e.tags, e.description);
+            const ins = run(`INSERT INTO entries (network_id, ip, ip_num, fqdn, alias, mac, type, status, tags, description, expires_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+              net.id, e.ip, e.ip_num, e.fqdn, e.alias, e.mac, e.type, e.status, e.tags, e.description, e.expires_at);
             hist(net.id, Number(ins.lastInsertRowid), e.ip, 'create', snapshot(e, 'new'));
             added++;
           }
         } catch (err) { errors.push(`Wiersz ${i + 2}: ${err.message}`); }
       });
-      db.exec('COMMIT');
+      db.exec(dry ? 'ROLLBACK' : 'COMMIT');
     } catch (err) { db.exec('ROLLBACK'); throw err; }
-    log('import', 'network', `${net.name}: +${added} ~${updated}`);
-    return { added, updated, errors: errors.slice(0, 20) };
+    return { added, updated, errors: errors.slice(0, 20), error_count: errors.length, dry_run: !!dry };
+  }
+  // CSV (`csv` text) or Excel (`xlsx` base64; the sheet named like the network, else the first). `dry_run` reports without saving.
+  route('POST', '/api/networks/:id/import', ({ params, body, user }) => {
+    const net = must(one('SELECT * FROM networks WHERE id=?', params.id), 'Sieć');
+    need(user, net.site_id, 'contributor');
+    let table;
+    if (body.xlsx) {
+      let sheets;
+      try { sheets = readXlsx(Buffer.from(String(body.xlsx), 'base64')); } catch (e) { throw bad(e.message); }
+      table = (sheets.find((s) => s.name === net.name.slice(0, 31)) ?? sheets[0])?.rows ?? [];
+    } else table = parseCsv(String(body.csv ?? ''));
+    if (table.length < 2) throw bad('Plik jest pusty');
+    const r = importRows(net, table, body.dry_run);
+    if (!r.dry_run) log('import', 'network', `${net.name}: +${r.added} ~${r.updated}`);
+    return r;
   });
 
   // ---------- discovery ----------
@@ -678,13 +712,17 @@ export function createApi(db, opts = {}) {
     const c = body.changes ?? {};
     if (c.type !== undefined && !TYPES.includes(c.type)) throw bad('Nieprawidłowy typ');
     if (c.status !== undefined && !STATUSES.includes(c.status)) throw bad('Nieprawidłowy status');
-    const addTags = str(c.add_tags, 200).split(',').map((t) => t.trim().toLowerCase()).filter(Boolean);
+    const tagList = (v) => str(v, 200).split(',').map((t) => t.trim().toLowerCase()).filter(Boolean);
+    const addTags = tagList(c.add_tags), dropTags = new Set(tagList(c.remove_tags));
+    if (c.expires_at && !/^\d{4}-\d{2}-\d{2}$/.test(c.expires_at)) throw bad('Nieprawidłowa data ważności (RRRR-MM-DD)');
+    const desc = c.description !== undefined ? str(c.description) : undefined;
     db.exec('BEGIN');
     try {
       for (const r of rows) {
-        const tags = [...new Set([...r.tags.split(',').filter(Boolean), ...addTags])].join(',');
-        hist(net.id, r.id, r.ip, 'update', diff(r, { ...r, type: c.type ?? r.type, status: c.status ?? r.status, tags }));
-        run("UPDATE entries SET type=?, status=?, tags=?, updated_at=datetime('now') WHERE id=?", c.type ?? r.type, c.status ?? r.status, tags, r.id);
+        const tags = [...new Set([...r.tags.split(',').filter(Boolean), ...addTags])].filter((t) => !dropTags.has(t)).join(',');
+        const next = { ...r, type: c.type ?? r.type, status: c.status ?? r.status, tags, description: desc ?? r.description, expires_at: c.expires_at === undefined ? r.expires_at : c.expires_at };
+        hist(net.id, r.id, r.ip, 'update', diff(r, next));
+        run("UPDATE entries SET type=?, status=?, tags=?, description=?, expires_at=?, updated_at=datetime('now') WHERE id=?", next.type, next.status, next.tags, next.description, next.expires_at, r.id);
       }
       db.exec('COMMIT');
     } catch (e) { db.exec('ROLLBACK'); throw e; }
@@ -883,9 +921,37 @@ export function createApi(db, opts = {}) {
   route('GET', '/api/me', ({ user }) => {
     const me = user ? meOf(user) : null;
     if (me?.global_role === 'admin') me.pending_users = noRoleCount();
-    if (me) { me.google_email = auth.identityOf(user.id, 'google'); me.has_password = auth.hasPassword(user.id); }
+    if (me) { me.google_email = auth.identityOf(user.id, 'google'); me.has_password = auth.hasPassword(user.id); me.totp = auth.totpEnabled(user.id); me.recovery_left = me.totp ? auth.recoveryLeft(user.id) : 0; }
     return { user: me, setup_required: count('users') === 0, registration_open: registrationOpen(), google_login: googleLogin().ready, version: opts.version ?? 'dev' };
   }, { public: true });
+  // Prometheus text exposition. Authenticate with a personal API token (Authorization: Bearer); only networks the token's owner can read are listed.
+  const esc = (v) => String(v ?? '').replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n');
+  route('GET', '/api/metrics', ({ user }) => {
+    const sites = new Set(visibleSiteIds(user));
+    const out = [];
+    const fam = (name, help, type = 'gauge') => out.push(`# HELP ${name} ${help}`, `# TYPE ${name} ${type}`);
+    const rows = all(`SELECT n.*, s.name AS site_name, t.name AS tenant_name FROM networks n JOIN sites s ON s.id=n.site_id JOIN tenants t ON t.id=s.tenant_id ORDER BY t.name, s.name, n.cidr`)
+      .filter((n) => sites.has(n.site_id)).map((n) => ({ n, st: netStats(n),
+        seen: one('SELECT MAX(last_seen) AS m FROM entries WHERE network_id=?', n.id).m }));
+    const lab = ({ n }) => `tenant="${esc(n.tenant_name)}",site="${esc(n.site_name)}",network="${esc(n.name)}",cidr="${n.cidr}",vlan="${n.vlan ?? ''}"`;
+    const series = (name, help, f) => { fam(name, help); for (const r of rows) { const v = f(r); if (v != null) out.push(`${name}{${lab(r)}} ${v}`); } };
+    series('ipam_network_addresses_total', 'Usable addresses in the network', (r) => r.st.total);
+    series('ipam_network_addresses_used', 'Addresses with an entry that is not free', (r) => r.st.used + r.st.infra);
+    series('ipam_network_utilization_ratio', 'Used addresses divided by usable addresses (0-1)', (r) => (r.st.total ? +((r.st.used + r.st.infra) / r.st.total).toFixed(4) : 0));
+    series('ipam_network_issues', 'Open consistency warnings of the network', (r) => r.st.issues);
+    series('ipam_network_new_hosts', 'Hosts found by a scan that are not yet entries', (r) => r.st.new_hosts);
+    series('ipam_network_mac_alerts', 'Entries whose observed MAC differs from the recorded one', (r) => r.st.mac_alerts);
+    series('ipam_network_last_seen_timestamp_seconds', 'Time a scan or integration last saw any host in the network', (r) => (r.seen ? Math.floor(Date.parse(`${r.seen.replace(' ', 'T')}Z`) / 1000) : null));
+    fam('ipam_entries', 'Entries by status');
+    const byStatus = all(`SELECT e.status, COUNT(*) AS c, e.network_id FROM entries e GROUP BY e.network_id, e.status`);
+    const mine = new Set(rows.map((r) => r.n.id));
+    const tot = {};
+    for (const b of byStatus) if (mine.has(b.network_id)) tot[b.status] = (tot[b.status] ?? 0) + b.c;
+    for (const st of STATUSES) out.push(`ipam_entries{status="${st}"} ${tot[st] ?? 0}`);
+    fam('ipam_build_info', 'Version of simpleIPAM');
+    out.push(`ipam_build_info{version="${esc(opts.version ?? 'dev')}"} 1`);
+    return { raw: out.join('\n') + '\n', contentType: 'text/plain; version=0.0.4; charset=utf-8', inline: true };
+  });
   route('GET', '/api/health', () => ({ ok: true }), { public: true });
   // ---------- notifications ----------
   const notifyPublic = () => {
@@ -1209,9 +1275,11 @@ export function createApi(db, opts = {}) {
     return { user: meOf(u), first: u.first };
   }, { public: true });
   route('POST', '/api/auth/login', ({ body, ctx }) => {
-    const { user, token } = auth.login(body.username, body.password, ctx.ip);
-    ctx.newToken = token;
-    return { user: meOf(user) };
+    let r;
+    try { r = auth.login(body.username, body.password, ctx.ip, body.code); }
+    catch (e) { if (e.totp) return { totp_required: true, invalid: !!String(body.code ?? '').trim(), error: e.message }; throw e; }
+    ctx.newToken = r.token;
+    return { user: meOf(r.user) };
   }, { public: true });
   route('POST', '/api/auth/logout', ({ ctx }) => { auth.logout(ctx.token); ctx.clearToken = true; return { ok: true }; }, { public: true });
   route('GET', '/api/me/tokens', ({ user, ctx }) => (sessionOnly(ctx), auth.listTokens(user.id)));
@@ -1226,6 +1294,32 @@ export function createApi(db, opts = {}) {
     if (!auth.deleteToken(user.id, Number(params.id))) throw new HttpError(404, 'Token nie istnieje');
     return { ok: true };
   });
+  // Two-factor sign-in (TOTP). Setup stays pending until a valid code confirms it; recovery codes are shown once.
+  route('POST', '/api/me/totp/setup', ({ user, ctx }) => {
+    sessionOnly(ctx);
+    return auth.totpSetup(user.id, user.username);
+  });
+  route('POST', '/api/me/totp/enable', ({ body, user, ctx }) => {
+    sessionOnly(ctx);
+    const r = auth.totpEnable(user.id, body.code);
+    log('update', 'user', `${user.username}: weryfikacja dwuetapowa włączona`);
+    return r;
+  });
+  route('POST', '/api/me/totp/disable', ({ body, user, ctx }) => {
+    sessionOnly(ctx);
+    if (!auth.totpEnabled(user.id)) throw bad('Weryfikacja dwuetapowa nie jest włączona');
+    if (!auth.hasPassword(user.id) || !auth.checkPassword(user.id, body.password)) throw new HttpError(403, 'Podaj aktualne hasło');
+    auth.totpReset(user.id);
+    log('update', 'user', `${user.username}: weryfikacja dwuetapowa wyłączona`);
+    return { ok: true };
+  });
+  route('DELETE', '/api/users/:id/totp', ({ params, user }) => {
+    needGlobalAdmin(user);
+    const u = must(one('SELECT id, username FROM users WHERE id=?', params.id), 'Użytkownik');
+    auth.totpReset(u.id); auth.dropSessions(u.id);
+    log('update', 'user', `${u.username}: reset weryfikacji dwuetapowej`);
+    return { ok: true };
+  });
   route('POST', '/api/me/password', ({ body, user, ctx }) => {
     sessionOnly(ctx);
     if (auth.hasPassword(user.id) && !auth.checkPassword(user.id, body.current)) throw new HttpError(403, 'Aktualne hasło jest nieprawidłowe');
@@ -1237,7 +1331,7 @@ export function createApi(db, opts = {}) {
 
   route('GET', '/api/users', ({ user }) => {
     needGlobalAdmin(user);
-    return all(`SELECT u.id, u.username, u.created_at, ${NO_ROLES} AS no_roles FROM users u ORDER BY u.username COLLATE NOCASE`).map((u) => {
+    return all(`SELECT u.id, u.username, u.created_at, u.totp_enabled AS totp, ${NO_ROLES} AS no_roles FROM users u ORDER BY u.username COLLATE NOCASE`).map((u) => {
       const r = auth.rolesOf(u.id);
       return { ...u, no_roles: !!u.no_roles, global_role: r.global, tenant_roles: r.tenants, site_roles: r.sites };
     });

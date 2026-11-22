@@ -98,6 +98,8 @@ export function Users({ tenants, me, notify, onChanged }) {
                       </div>
                     </td>
                     <td class="row-actions always">
+                      {u.totp && <button class="icon-btn" title={t('Resetuj weryfikację dwuetapową')} aria-label={t('Resetuj weryfikację dwuetapową')}
+                        onClick={() => ask(t('Zresetować weryfikację dwuetapową użytkownika {name}? Zostanie wylogowany.', { name: u.username })).then((yes) => yes && act(() => api.resetTotp(u.id), 'Weryfikacja dwuetapowa zresetowana'))}><Icon name="lock" size={16} /></button>}
                       <button class="icon-btn" title={t('Zmień hasło')} aria-label={t('Zmień hasło')} onClick={() => setPwFor(u)}><Icon name="key" size={16} /></button>
                       {u.id !== me.id && <button class="icon-btn danger" aria-label={t('Usuń użytkownika')}
                         onClick={() => ask(t('Usunąć użytkownika {name}?', { name: u.username })).then((yes) => yes && act(() => api.delUser(u.id), 'Usunięto użytkownika'))}><Icon name="trash" size={16} /></button>}

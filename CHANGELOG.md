@@ -4,6 +4,13 @@ All notable changes to simpleIPAM are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
+### Added
+- Two-factor sign-in (TOTP): authenticator-app setup with QR in the profile menu, one-time recovery codes, replay protection, admin reset per user, `reset-admin` clears it. Google sign-in is unaffected.
+- `GET /api/metrics`: Prometheus metrics per network (addresses total/used, utilisation, warnings, new hosts, MAC alerts, last seen) and entries by status; scrape with an API token.
+- Excel (.xlsx) import (understands the headers of the Excel export in any app language), semicolon CSV, and a preview before anything is saved (`dry_run`). Empty cells and missing columns keep the current value.
+- Bulk edit can also remove tags and set description and expiry date.
+- Search finds a MAC in any notation (`aa-bb-…`, `aabb.ccdd…`); press `/` to open search.
+
 
 ## [0.18.0] - 2026-11-22
 ### Changed

@@ -75,7 +75,7 @@ async function readBody(req) {
   let size = 0;
   for await (const c of req) {
     size += c.length;
-    if (size > 2_000_000) throw new HttpError(413, 'Zbyt duże żądanie');
+    if (size > 6_000_000) throw new HttpError(413, 'Zbyt duże żądanie');
     chunks.push(c);
   }
   if (!chunks.length) return {};

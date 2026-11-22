@@ -199,7 +199,11 @@ function BulkBar({ count, onApply, onDelete, onClear, onLabels }) {
   const [type, setType] = useState('');
   const [status, setStatus] = useState('');
   const [tags, setTags] = useState('');
-  const changes = { ...(type && { type }), ...(status && { status }), ...(tags.trim() && { add_tags: tags }) };
+  const [dropTags, setDropTags] = useState('');
+  const [desc, setDesc] = useState('');
+  const [until, setUntil] = useState('');
+  const changes = { ...(type && { type }), ...(status && { status }), ...(tags.trim() && { add_tags: tags }), ...(dropTags.trim() && { remove_tags: dropTags }),
+    ...(desc.trim() && { description: desc.trim() }), ...(until && { expires_at: until }) };
   return (
     <div class="bulk">
       <b>{t('{n} zaznaczonych', { n: count })}</b>
@@ -210,6 +214,9 @@ function BulkBar({ count, onApply, onDelete, onClear, onLabels }) {
         <option value="">{t('status…')}</option>{Object.entries(STATUS_LABELS).map(([k, l]) => <option value={k}>{l}</option>)}
       </select>
       <input placeholder={t('dodaj tagi…')} value={tags} onInput={(e) => setTags(e.target.value)} />
+      <input placeholder={t('usuń tagi…')} value={dropTags} onInput={(e) => setDropTags(e.target.value)} />
+      <input placeholder={t('opis…')} value={desc} onInput={(e) => setDesc(e.target.value)} />
+      <input type="date" aria-label={t('Ważny do')} title={t('Ważny do')} value={until} onInput={(e) => setUntil(e.target.value)} />
       <button class="btn small primary" disabled={!Object.keys(changes).length} onClick={() => onApply(changes)}>{t('Zastosuj')}</button>
       <span class="spacer" />
       <button class="btn small ghost" onClick={onLabels}><Icon name="qr" size={14} />{t('Etykiety')}</button>
@@ -364,9 +371,18 @@ export function Network({ id, notify, reload, onEditNet, onDeleteNet }) {
     const file = ev.target.files[0]; ev.target.value = '';
     if (!file) return;
     try {
-      const r = await api.importCsv(net.id, await file.text());
-      notify(`${t('Import')}: +${r.added}, ${t('zaktualizowano')} ${r.updated}${r.errors.length ? `, ${t('błędy')}: ${r.errors.length}` : ''}`, r.errors.length ? 'error' : 'ok');
-      if (r.errors.length) console.warn(r.errors);
+      let body;
+      if (/\.xlsx$/i.test(file.name)) {
+        const bytes = new Uint8Array(await file.arrayBuffer());
+        let bin = ''; for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+        body = { xlsx: btoa(bin) };
+      } else body = { csv: await file.text() };
+      const dry = await api.importFile(net.id, { ...body, dry_run: true });          // preview first, nothing is saved yet
+      const lines = [t('Nowych wpisów: {n}', { n: dry.added }), t('Zaktualizowanych: {n}', { n: dry.updated }), ...(dry.error_count ? [t('Wierszy z błędem: {n}', { n: dry.error_count }), ...dry.errors.slice(0, 5)] : [])];
+      if (!dry.added && !dry.updated) { notify(dry.errors[0] ?? t('Nic do zaimportowania'), 'error'); return; }
+      if (!await ask(lines.join('\n'), { title: 'Zaimportować plik?', confirm: 'Importuj', danger: false })) return;
+      const r = await api.importFile(net.id, body);
+      notify(`${t('Import')}: +${r.added}, ${t('zaktualizowano')} ${r.updated}${r.error_count ? `, ${t('błędy')}: ${r.error_count}` : ''}`, r.error_count ? 'error' : 'ok');
       refresh();
     } catch (err) { notify(err.message, 'error'); }
   };
@@ -523,7 +539,7 @@ export function Network({ id, notify, reload, onEditNet, onDeleteNet }) {
               <a href={`/api/networks/${net.id}/export/bind`}>BIND<small>{t('rekordy A')}</small></a>
             </div>
           </details>
-          {canEdit && <label class="btn ghost"><Icon name="upload" />{t('Import')}<input type="file" accept=".csv,text/csv" hidden onChange={importFile} /></label>}
+          {canEdit && <label class="btn ghost"><Icon name="upload" />{t('Import')}<input type="file" accept=".csv,.xlsx,text/csv" hidden onChange={importFile} /></label>}
           {canEdit && <button class="btn primary" onClick={async () => setForm({ ip: (await api.nextFree(net.id)).ip ?? '' })}>
             <Icon name="plus" />{t('Dodaj')}</button>}
         </div>

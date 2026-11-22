@@ -8,6 +8,7 @@ const GOOGLE_MSG = { denied: 'Odmówiono dostępu na ekranie Google', state: 'Se
 export function AuthScreen({ onAuth, registrationOpen = true, version = '', setup = false, google = false }) {
   useLang();
   const [mode, setMode] = useState('login');
+  const [needCode, setNeedCode] = useState(false);
   const [f, setF] = useState({ username: '', password: '', confirm: '' });
   const [err, setErr] = useState('');
   const [busy, setBusy] = useState(false);
@@ -28,7 +29,8 @@ export function AuthScreen({ onAuth, registrationOpen = true, version = '', setu
     if ((setup || mode === 'register') && f.password !== f.confirm) return setErr(t('Hasła nie są takie same'));
     setBusy(true);
     try {
-      const r = await (mode === 'login' && !setup ? api.login : api.register)(f.username, f.password);
+      const r = await (mode === 'login' && !setup ? api.login : api.register)(f.username, f.password, f.code);
+      if (r.totp_required) { setNeedCode(true); setErr(r.invalid ? t('Nieprawidłowy kod weryfikacyjny') : ''); setBusy(false); return; }
       onAuth(r.user, r.first);
     } catch (e2) { setErr(e2.message); setBusy(false); }
   };
@@ -52,6 +54,8 @@ export function AuthScreen({ onAuth, registrationOpen = true, version = '', setu
         <Field label="Login"><input autofocus autocomplete="username" value={f.username} onInput={(e) => setF({ ...f, username: e.target.value })} required /></Field>
         <Field label="Hasło" hint={setup || mode === 'register' ? 'min. 8 znaków' : ''}>
           <input type="password" autocomplete={mode === 'login' && !setup ? 'current-password' : 'new-password'} value={f.password} onInput={(e) => setF({ ...f, password: e.target.value })} required /></Field>
+        {needCode && mode === 'login' && !setup && <Field label="Kod weryfikacyjny" hint="6 cyfr z aplikacji uwierzytelniającej albo kod odzyskiwania">
+          <input autofocus inputmode="numeric" autocomplete="one-time-code" value={f.code ?? ''} onInput={(e) => setF({ ...f, code: e.target.value })} required /></Field>}
         {(setup || mode === 'register') && <Field label="Powtórz hasło">
           <input type="password" autocomplete="new-password" value={f.confirm} onInput={(e) => setF({ ...f, confirm: e.target.value })} required /></Field>}
         {err && <p class="error-text" role="alert">{t(err)}</p>}

@@ -1,5 +1,6 @@
 import { scryptSync, randomBytes, timingSafeEqual, createHash } from 'node:crypto';
 import { HttpError } from './errors.js';
+import * as totp from './totp.js';
 
 export const RANK = { none: 0, reader: 1, contributor: 2, admin: 3 };
 export const ROLES = Object.keys(RANK);
@@ -90,7 +91,20 @@ export function createAuth(db) {
   }
   const identityOf = (userId, provider) => one('SELECT email FROM user_identities WHERE user_id=? AND provider=?', userId, provider)?.email ?? null;
 
-  function login(username, password, ip) {
+  // Second factor: a 6-digit TOTP code or a one-time recovery code. Throws a 401 whose `totp` flag tells the UI to ask for it.
+  function checkSecondFactor(u, code, bump) {
+    const given = String(code ?? '').trim();
+    if (!given) throw Object.assign(new HttpError(401, 'Podaj kod z aplikacji uwierzytelniającej'), { totp: true });
+    const step = totp.verify(u.totp_secret, given);
+    if (step !== null && step > u.totp_last) { run('UPDATE users SET totp_last=? WHERE id=?', step, u.id); return; }
+    const list = JSON.parse(u.totp_recovery || '[]');
+    const h = sha(given.toLowerCase().replace(/[\s-]/g, ''));
+    if (step === null && list.includes(h)) { run('UPDATE users SET totp_recovery=? WHERE id=?', JSON.stringify(list.filter((x) => x !== h)), u.id); return; }
+    bump();
+    throw Object.assign(new HttpError(401, 'Nieprawidłowy kod weryfikacyjny'), { totp: true });
+  }
+
+  function login(username, password, ip, code) {
     username = String(username ?? '').trim();
     const key = `${ip}|${username.toLowerCase()}`;
     const f = fails.get(key);
@@ -100,6 +114,9 @@ export function createAuth(db) {
     if (!ok) {
       fails.set(key, { n: (f && f.until > Date.now() ? f.n : 0) + 1, until: Date.now() + LOCK_MS });
       throw new HttpError(401, 'Nieprawidłowy login lub hasło');
+    }
+    if (u.totp_enabled) {
+      checkSecondFactor(u, code, () => fails.set(key, { n: (f && f.until > Date.now() ? f.n : 0) + 1, until: Date.now() + LOCK_MS }));
     }
     fails.delete(key);
     return { user: u, token: startSession(u.id) };
@@ -131,6 +148,25 @@ export function createAuth(db) {
     if (row) run("UPDATE api_tokens SET last_used = datetime('now') WHERE id = ?", row.token_id);
     return row ? { id: row.id, username: row.username } : null;
   }
+  // ---- two-factor management (setup stays pending until a valid code confirms it) ----
+  const totpEnabled = (userId) => !!one('SELECT totp_enabled FROM users WHERE id=?', userId)?.totp_enabled;
+  function totpSetup(userId, username) {
+    if (totpEnabled(userId)) throw new HttpError(409, 'Weryfikacja dwuetapowa jest już włączona');
+    const secret = totp.newSecret();
+    run('UPDATE users SET totp_secret=?, totp_enabled=0, totp_last=0 WHERE id=?', secret, userId);
+    return { secret, uri: totp.uri(secret, username) };
+  }
+  function totpEnable(userId, code) {
+    const u = one('SELECT * FROM users WHERE id=?', userId);
+    if (u.totp_enabled || !u.totp_secret) throw new HttpError(409, 'Najpierw rozpocznij konfigurację weryfikacji dwuetapowej');
+    const step = totp.verify(u.totp_secret, code);
+    if (step === null) throw new HttpError(400, 'Nieprawidłowy kod — sprawdź czas na telefonie i spróbuj ponownie');
+    const codes = Array.from({ length: 8 }, () => randomBytes(5).toString('hex'));   // 10 hex chars each
+    run('UPDATE users SET totp_enabled=1, totp_last=?, totp_recovery=? WHERE id=?', step, JSON.stringify(codes.map((c) => sha(c))), userId);
+    return { recovery_codes: codes.map((c) => `${c.slice(0, 5)}-${c.slice(5)}`) };
+  }
+  const totpReset = (userId) => run("UPDATE users SET totp_secret='', totp_enabled=0, totp_last=0, totp_recovery='[]' WHERE id=?", userId);
+  const recoveryLeft = (userId) => JSON.parse(one('SELECT totp_recovery FROM users WHERE id=?', userId)?.totp_recovery || '[]').length;
   const dropSessions = (userId) => run('DELETE FROM sessions WHERE user_id = ?', userId);
 
   // { global: role, tenants: { [tenantId]: role }, sites: { [siteId]: role } }
@@ -149,5 +185,5 @@ export function createAuth(db) {
 
   const globalAdminCount = () => one("SELECT COUNT(*) AS n FROM role_assignments WHERE site_id IS NULL AND tenant_id IS NULL AND role='admin'").n;
 
-  return { register, login, loginWithIdentity, linkIdentity, unlinkIdentity, hasPassword, identityOf, logout, sessionUser, setPassword, checkPassword, dropSessions, rolesOf, effective, effectiveTenant, globalAdminCount, createToken, listTokens, deleteToken, tokenUser };
+  return { totpEnabled, totpSetup, totpEnable, totpReset, recoveryLeft, register, login, loginWithIdentity, linkIdentity, unlinkIdentity, hasPassword, identityOf, logout, sessionUser, setPassword, checkPassword, dropSessions, rolesOf, effective, effectiveTenant, globalAdminCount, createToken, listTokens, deleteToken, tokenUser };
 }
