@@ -5,6 +5,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-11-22
+
 ### Added
 - Notifications (Administration → Settings): a message to ntfy or a generic JSON webhook (Slack/Discord-compatible) when a scan or UniFi finds a new device, a known device shows up at a different address, or a MAC changes. Findings from one scan are sent as a single message; the URL is write-only and there is a "Send test" button. API: `GET/PUT /api/admin/notify`, `POST /api/admin/notify/test`.
 
