@@ -5,6 +5,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+## [0.14.0] - 2026-11-22
+
 ### Added
 - "What changed" card on every network (last 24 h / 7 / 30 days): hosts that appeared, hosts that stopped responding, entries added and removed. Backed by `GET /api/networks/:id/changes`.
 - New warning in "To review" when a newly discovered host carries the MAC of a known entry at another address (device moved, or the same hardware has two addresses).
