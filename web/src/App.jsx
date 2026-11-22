@@ -64,7 +64,7 @@ function TenantForm({ tenant, onClose, onSaved, notify, ipv6 }) {
       <form class="form-grid" onSubmit={submit}>
         <Field label="Nazwa" span><input value={f.name} onInput={(e) => setF({ ...f, name: e.target.value })} placeholder={tx('rodzina, firma, klient-x…')} required /></Field>
         <Field label="Opis" span><input value={f.description} onInput={(e) => setF({ ...f, description: e.target.value })} /></Field>
-        {ipv6 && <label class="check span"><input type="checkbox" checked={!!f.ipv6} onChange={(e) => setF({ ...f, ipv6: e.target.checked })} /><span>{tx('Ten tenant używa IPv6')}</span></label>}
+        {ipv6 && <label class="check-line span"><input type="checkbox" checked={!!f.ipv6} onChange={(e) => setF({ ...f, ipv6: e.target.checked })} /><span>{tx('Ten tenant używa IPv6')}</span></label>}
         <footer>
           <button type="button" class="btn ghost" onClick={onClose}>{tx('Anuluj')}</button>
           <button class="btn primary">{tx('Zapisz')}</button>
@@ -531,8 +531,10 @@ export function App() {
               onEditNet={(n) => setModal({ kind: 'net', net: n })} onDeleteNet={delNet} />
           : loaded && (
             <div class="page welcome">
-              <h1>{tx('Witaj w simpleIPAM')}</h1>
-              {tenants.length > 0 && <a class="btn ghost small" href={`/api/export.xlsx?lang=${getLang()}`} title={tx('wszystkie sieci, arkusz na sieć')}><Icon name="download" size={14} />{tx('Eksport do Excela')}</a>}
+              <header class="page-head">
+                <h1>{tx('Witaj w simpleIPAM')}</h1>
+                {tenants.length > 0 && <div class="head-actions"><a class="btn ghost small" href={`/api/export.xlsx?lang=${getLang()}`} title={tx('wszystkie sieci, arkusz na sieć')}><Icon name="download" size={14} />{tx('Eksport do Excela')}</a></div>}
+              </header>
               {!tenants.length ? (
                 <>
                   {isAdmin ? <>

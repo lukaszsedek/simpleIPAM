@@ -898,4 +898,7 @@ export default {
   "VLAN {vlan} jest użyty dwa razy w lokalizacji „{name}”": "VLAN {vlan} wird am Standort „{name}“ doppelt verwendet",
   "Prefiks nie istnieje": "Das Präfix existiert nicht",
   "Blok {cidr} nakłada się z prefiksem „{name}” ({cidr2}, {site})": "Block {cidr} überschneidet sich mit dem Präfix „{name}“ ({cidr2}, {site})",
+  "24 h": "24 Std.",
+  "7 dni": "7 Tage",
+  "30 dni": "30 Tage",
 };

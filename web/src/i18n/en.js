@@ -898,4 +898,7 @@ export default {
   "VLAN {vlan} jest użyty dwa razy w lokalizacji „{name}”": "VLAN {vlan} is used twice in location “{name}”",
   "Prefiks nie istnieje": "The prefix does not exist",
   "Blok {cidr} nakłada się z prefiksem „{name}” ({cidr2}, {site})": "Block {cidr} overlaps prefix “{name}” ({cidr2}, {site})",
+  "24 h": "24 h",
+  "7 dni": "7 days",
+  "30 dni": "30 days",
 };

@@ -689,8 +689,8 @@ pre.recovery { margin: 0; padding: 12px 14px; border-radius: 12px; background: v
 .meter i { display: block; height: 100%; background: var(--accent); border-radius: inherit; }
 .pool-seg.v6 { background: var(--accent); }
 .section-title { margin: 8px 0 0; font-size: 15px; letter-spacing: .02em; }
-.check { display: flex; gap: 10px; align-items: flex-start; }
-.check input { width: auto; margin-top: 3px; }
+.check-line { display: flex; gap: 10px; align-items: flex-start; }
+.check-line input { width: auto; margin-top: 3px; }
 .segmented.small { width: fit-content; }
 .calc-line { margin: 0; font-variant-numeric: tabular-nums; }
 .calc-grid { display: grid; grid-template-columns: max-content 1fr; gap: 6px 18px; margin: 12px 0 0; }
@@ -709,3 +709,16 @@ textarea.mono { width: 100%; resize: vertical; padding: 10px 12px; border-radius
   .vlsm-row .vlsm-prefix { display: none; }
 }
 .table-wrap:not(:last-child) { margin-bottom: 12px; }   /* the negative bottom margin only makes sense when the table ends the card */
+
+/* entry toolbar: labels fold away into icon-only buttons when the card is narrow, so it stays on one row */
+.toolbar-card { container-type: inline-size; container-name: tb; }
+@container tb (max-width: 1040px) {
+  .toolbar .btn.ghost .lbl { display: none; }
+  .toolbar .btn.ghost { padding-inline: 10px; }
+}
+td.check, th.check { vertical-align: middle; }
+/* "what changed": addresses as compact chips instead of one long column */
+.change-groups ul { display: flex; flex-wrap: wrap; gap: 6px; }
+.change-groups li { gap: 6px; flex-wrap: nowrap; align-items: center; padding: 3px 10px; border-radius: 999px; background: var(--surface-2); border: 1px solid var(--border); font-size: 12.5px; }
+.card-head .segmented { max-width: 100%; }
+.card-head .segmented button { white-space: nowrap; }

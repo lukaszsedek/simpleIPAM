@@ -484,7 +484,7 @@ export function Network({ id, notify, reload, onEditNet, onDeleteNet }) {
           <div class="card-head">
             <h3>{t('Co się zmieniło')}</h3>
             <div class="segmented" role="group" aria-label={t('Co się zmieniło')}>
-              {[[1, 'ostatnie 24 h'], [7, 'ostatnie 7 dni'], [30, 'ostatnie 30 dni']].map(([d, l]) => (
+              {[[1, '24 h'], [7, '7 dni'], [30, '30 dni']].map(([d, l]) => (
                 <button class={chgDays === d ? 'on' : ''} aria-pressed={chgDays === d} onClick={() => { setChgDays(d); try { localStorage.chgDays = d; } catch { /* not persisted */ } }}>{t(l)}</button>
               ))}
             </div>
@@ -508,7 +508,7 @@ export function Network({ id, notify, reload, onEditNet, onDeleteNet }) {
         <IpMap net={net} byNum={byNum} onPick={pick} />
       </section>
 
-      <section class="card">
+      <section class="card toolbar-card">
         <div class="toolbar">
           <div class="search-box"><Icon name="search" size={16} />
             <input placeholder={t('Filtruj wpisy…')} value={q} onInput={(e) => setQ(e.target.value)} /></div>
@@ -518,18 +518,18 @@ export function Network({ id, notify, reload, onEditNet, onDeleteNet }) {
             ))}
           </div>
           <div class="spacer" />
-          <button class="btn ghost" onClick={() => setHist(true)}><Icon name="history" />{t('Historia')}</button>
-          {canEdit && <button class="btn ghost" onClick={() => setScan(true)}><Icon name="radar" />{t('Skanuj')}</button>}
-          <button class="btn ghost" onClick={() => setDns(true)} title={t('Porównuje FQDN wpisów z tym, co odpowiada DNS')}><Icon name="search" />DNS</button>
-          <button class="btn ghost" onClick={() => setLabels(true)} title={t('Drukuj etykiety z kodem QR')}><Icon name="qr" />{t('Etykiety')}</button>
+          <button class="btn ghost" aria-label={t('Historia')} title={t('Historia')} onClick={() => setHist(true)}><Icon name="history" /><span class="lbl">{t('Historia')}</span></button>
+          {canEdit && <button class="btn ghost" aria-label={t('Skanuj')} title={t('Skanuj')} onClick={() => setScan(true)}><Icon name="radar" /><span class="lbl">{t('Skanuj')}</span></button>}
+          <button class="btn ghost" aria-label="DNS" onClick={() => setDns(true)} title={t('Porównuje FQDN wpisów z tym, co odpowiada DNS')}><Icon name="search" /><span class="lbl">DNS</span></button>
+          <button class="btn ghost" aria-label={t('Etykiety')} onClick={() => setLabels(true)} title={t('Drukuj etykiety z kodem QR')}><Icon name="qr" /><span class="lbl">{t('Etykiety')}</span></button>
           <details class="menu" onToggle={placeMenu}>
-            <summary class="btn ghost"><Icon name="menu" />{t('Kolumny')}</summary>
+            <summary class="btn ghost" aria-label={t('Kolumny')} title={t('Kolumny')}><Icon name="menu" /><span class="lbl">{t('Kolumny')}</span></summary>
             <div class="menu-list cols-menu">
               {[['mac', 'MAC'], ['type', 'Typ'], ['desc', 'Opis']].map(([k, l]) => <label class="toggle"><input type="checkbox" checked={cols[k]} onChange={(e) => setCol(k, e.target.checked)} /> {t(l)}</label>)}
             </div>
           </details>
           <details class="menu" onToggle={placeMenu}>
-            <summary class="btn ghost"><Icon name="download" />{t('Eksport')}</summary>
+            <summary class="btn ghost" aria-label={t('Eksport')} title={t('Eksport')}><Icon name="download" /><span class="lbl">{t('Eksport')}</span></summary>
             <div class="menu-list">
               <a href={`/api/networks/${net.id}/export.xlsx?lang=${getLang()}`}>{t('Excel (.xlsx)')}<small>{t('dla tej sieci')}</small></a>
               <a href={`/api/export.xlsx?lang=${getLang()}`}>{t('Eksport do Excela')}<small>{t('wszystkie sieci, arkusz na sieć')}</small></a>
@@ -539,9 +539,9 @@ export function Network({ id, notify, reload, onEditNet, onDeleteNet }) {
               <a href={`/api/networks/${net.id}/export/bind`}>BIND<small>{t('rekordy A')}</small></a>
             </div>
           </details>
-          {canEdit && <label class="btn ghost"><Icon name="upload" />{t('Import')}<input type="file" accept=".csv,.xlsx,text/csv" hidden onChange={importFile} /></label>}
+          {canEdit && <label class="btn ghost" title={t('Import')}><Icon name="upload" /><span class="lbl">{t('Import')}</span><input type="file" accept=".csv,.xlsx,text/csv" hidden onChange={importFile} /></label>}
           {canEdit && <button class="btn primary" onClick={async () => setForm({ ip: (await api.nextFree(net.id)).ip ?? '' })}>
-            <Icon name="plus" />{t('Dodaj')}</button>}
+            <Icon name="plus" /><span class="lbl">{t('Dodaj')}</span></button>}
         </div>
 
         {sel.size > 0 && <BulkBar count={sel.size} onClear={() => setSel(new Set())} onLabels={() => setLabels(true)}

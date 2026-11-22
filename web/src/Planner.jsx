@@ -409,7 +409,7 @@ function TenantSettings({ plan, canEdit, notify, onChanged, reload }) {
         <Field label="Nazwa" span><input value={f.name} onInput={(e) => setF({ ...f, name: e.target.value })} required disabled={!canEdit} /></Field>
         <Field label="Opis" span><input value={f.description} onInput={(e) => setF({ ...f, description: e.target.value })} disabled={!canEdit} /></Field>
         {plan.ipv6_enabled
-          ? <label class="check span"><input type="checkbox" checked={f.ipv6} onChange={(e) => setF({ ...f, ipv6: e.target.checked })} disabled={!canEdit} />
+          ? <label class="check-line span"><input type="checkbox" checked={f.ipv6} onChange={(e) => setF({ ...f, ipv6: e.target.checked })} disabled={!canEdit} />
               <span>{t('Ten tenant używa IPv6')}<small class="muted"> — {t('pokaże pule i prefiksy IPv6 w planowaniu')}</small></span></label>
           : <p class="muted small-text span">{t('IPv6 jest wyłączone globalnie (Administracja → Ustawienia).')}</p>}
         {canEdit && <footer><button class="btn primary">{t('Zapisz')}</button></footer>}

@@ -4,6 +4,12 @@ All notable changes to simpleIPAM are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
+### Fixed
+- Entry-table checkboxes were misaligned since 0.19.0 (a new `.check` class clashed with the table cell class).
+
+### Changed
+- Network page: the entry toolbar folds its buttons into icons on narrow cards so it stays on one row; "what changed" lists addresses as compact chips with short period labels (24 h / 7 days / 30 days); the home page's Excel export moved into the header.
+
 
 ## [0.19.0] - 2026-11-22
 ### Changed
