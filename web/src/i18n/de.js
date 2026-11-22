@@ -741,4 +741,6 @@ export default {
   "Najpierw zapisz adres powiadomień": "Speichern Sie zuerst die Benachrichtigungsadresse",
   "Nieznany rodzaj powiadomień (ntfy, webhook)": "Unbekannte Benachrichtigungsart (ntfy, webhook)",
   "Nie udało się wysłać: {err}": "Senden fehlgeschlagen: {err}",
+  "Start": "Start",
+  "Sprawdź": "Prüfen",
 };

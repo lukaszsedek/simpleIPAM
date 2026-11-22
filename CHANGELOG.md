@@ -5,6 +5,15 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+### Changed
+- Phones: the entries table becomes one card per address (IP, status, name, type, MAC and actions visible without sideways scrolling) and navigation moves to a floating bottom dock (Home / Review / Search / Menu) with a dimmed backdrop behind the side drawer.
+- Responsive polish: fluid headline and page padding, usage stats reflow to 3 / 2 columns, modals and cards react to their own width (container queries), a sticky table header on wide screens, tabular numerals for addresses.
+- Page changes cross-fade through the View Transitions API (skipped when reduced motion is requested).
+
+### Fixed
+- The "Export" and "Columns" dropdowns in the network toolbar were positioned like the profile menu and could float in a corner; they now open under their button and flip when near the window edge.
+- "New devices" rows no longer push their buttons off the screen on phones.
+
 ## [0.15.0] - 2026-11-22
 
 ### Added

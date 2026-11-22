@@ -741,4 +741,6 @@ export default {
   "Najpierw zapisz adres powiadomień": "Save the notification address first",
   "Nieznany rodzaj powiadomień (ntfy, webhook)": "Unknown notification type (ntfy, webhook)",
   "Nie udało się wysłać: {err}": "Could not send: {err}",
+  "Start": "Home",
+  "Sprawdź": "Review",
 };

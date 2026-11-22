@@ -12,7 +12,13 @@ import { t as tx, useLang, setLang, getLang, LANGS } from './i18n.js';
 const useHash = () => {
   const [h, setH] = useState(location.hash || '#/');
   useEffect(() => {
-    const f = () => setH(location.hash || '#/');
+    // Page changes cross-fade through the View Transitions API where it exists (and motion is allowed); otherwise they just switch.
+    const f = () => {
+      const next = location.hash || '#/';
+      if (document.startViewTransition && !matchMedia('(prefers-reduced-motion: reduce)').matches) {
+        document.startViewTransition(() => new Promise((done) => { setH(next); requestAnimationFrame(() => requestAnimationFrame(done)); setTimeout(done, 120); }));   // the timeout keeps a hidden tab (no animation frames) from freezing the old page
+      } else setH(next);
+    };
     addEventListener('hashchange', f);
     return () => removeEventListener('hashchange', f);
   }, []);
@@ -351,7 +357,7 @@ export function App() {
   if (!me) return <AuthScreen google={googleReady} version={version} setup={setupRequired} registrationOpen={regOpen} onAuth={(u) => { setSetupRequired(false); setMe(u); go('#/'); }} />;
 
   return (
-    <div class="shell">
+    <div class="shell" onClick={(e) => { if (nav && e.target === e.currentTarget) setNav(false); }}>
       <aside class={`sidebar ${nav ? 'open' : ''}`}>
         <a class="brand" href="#/" aria-label={tx('Strona główna')}><Logo size={28} />simpleIPAM</a>
         <button class="search-trigger" onClick={() => setPalette(true)}>
@@ -516,6 +522,12 @@ export function App() {
       {modal?.kind === 'tokens' && <Tokens notify={notify} onClose={() => setModal(null)} />}
       {modal?.kind === 'pw' && <PasswordForm me={me} googleReady={googleReady} notify={notify} onClose={() => setModal(null)} />}
       {palette && <Palette sites={sites} go={go} onClose={() => setPalette(false)} />}
+      <nav class="dock" aria-label="Menu">
+        <a href="#/" class={hash === '#/' ? 'on' : ''}><Icon name="home" /><span>{tx('Start')}</span></a>
+        <a href="#/issues" class={hash === '#/issues' ? 'on' : ''}><Icon name="check" /><span>{tx('Sprawdź')}</span>{issueTotal > 0 && <b class="badge warn" aria-label={`${issueTotal}`}>{issueTotal}</b>}</a>
+        <button onClick={() => setPalette(true)}><Icon name="search" /><span>{tx('Szukaj')}</span></button>
+        <button onClick={() => setNav(!nav)} aria-expanded={nav}><Icon name="menu" /><span>Menu</span></button>
+      </nav>
       <ConfirmHost />
       <Toasts items={toasts} onDone={(id) => setToasts((l) => l.filter((x) => x.id !== id))} />
     </div>

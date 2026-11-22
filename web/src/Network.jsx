@@ -142,6 +142,14 @@ function HistoryModal({ net, entry, onClose }) {
 }
 
 // Hovering or focusing a map cell lights the matching table row and vice versa (both carry data-n = numeric address).
+// A toolbar dropdown opens towards the right and flips to the left only when it would leave the window.
+const placeMenu = (e) => {
+  const d = e.currentTarget;
+  const list = d.querySelector('.menu-list');
+  if (!d.open || !list) return;
+  list.classList.remove('flip');
+  if (list.getBoundingClientRect().right > innerWidth - 8) list.classList.add('flip');
+};
 let lit = [];
 const light = (n) => {
   lit.forEach((x) => x.classList.remove('hot'));
@@ -368,10 +376,10 @@ export function Network({ id, notify, reload, onEditNet, onDeleteNet }) {
       {canEdit && <td class="check" />}
       <td class="mono ip">{ip}<div class="muted small-text nowrap">{extra.seen ?? ''}</div></td>
       <td class="name-cell" title={extra.title ?? ''}><b>{label}</b><div class="muted small-text">{hint}</div></td>
-      {cols.mac && <td class="mono muted">{extra.mac || '—'}</td>}
-      {cols.type && <td>{extra.type && <span class="chip">{extra.type}</span>}</td>}
-      <td><span class="chip">{t('Systemowy')}</span></td>
-      {cols.desc && <td />}
+      {cols.mac && <td class={`mono muted c-mac${extra.mac ? '' : ' none'}`}>{extra.mac || '—'}</td>}
+      {cols.type && <td class="c-type">{extra.type && <span class="chip">{extra.type}</span>}</td>}
+      <td class="c-status"><span class="chip">{t('Systemowy')}</span></td>
+      {cols.desc && <td class="c-desc" />}
       <td class="row-actions">{extra.actions}</td>
     </tr>
   );
@@ -482,13 +490,13 @@ export function Network({ id, notify, reload, onEditNet, onDeleteNet }) {
           <button class="btn ghost" onClick={() => setHist(true)}><Icon name="history" />{t('Historia')}</button>
           {canEdit && <button class="btn ghost" onClick={() => setScan(true)}><Icon name="radar" />{t('Skanuj')}</button>}
           <button class="btn ghost" onClick={() => setDns(true)} title={t('Porównuje FQDN wpisów z tym, co odpowiada DNS')}><Icon name="search" />DNS</button>
-          <details class="menu">
+          <details class="menu" onToggle={placeMenu}>
             <summary class="btn ghost"><Icon name="menu" />{t('Kolumny')}</summary>
             <div class="menu-list cols-menu">
               {[['mac', 'MAC'], ['type', 'Typ'], ['desc', 'Opis']].map(([k, l]) => <label class="toggle"><input type="checkbox" checked={cols[k]} onChange={(e) => setCol(k, e.target.checked)} /> {t(l)}</label>)}
             </div>
           </details>
-          <details class="menu">
+          <details class="menu" onToggle={placeMenu}>
             <summary class="btn ghost"><Icon name="download" />{t('Eksport')}</summary>
             <div class="menu-list">
               <a href={`/api/networks/${net.id}/export.xlsx?lang=${getLang()}`}>{t('Excel (.xlsx)')}<small>{t('dla tej sieci')}</small></a>
@@ -529,7 +537,7 @@ export function Network({ id, notify, reload, onEditNet, onDeleteNet }) {
                   <td class="name-cell"><EditableCell readOnly={!canEdit} value={e.fqdn} placeholder="FQDN" onSave={(v) => patch(e, { fqdn: v })} />
                     <EditableCell readOnly={!canEdit} className="alias" value={e.alias} placeholder={t('Alias')} onSave={(v) => patch(e, { alias: v })} />
                     {e.uplink && <div class="uplink muted small-text" title={t('Podłączony do (UniFi)')}>↳ {e.uplink}</div>}</td>
-                  {cols.mac && <td class="mono muted">{e.mac || '—'}
+                  {cols.mac && <td class={`mono muted c-mac${e.mac || e.mac_alert || e.mac_suggest ? '' : ' none'}`}>{e.mac || '—'}
                     {e.mac_alert && (
                       <div class="mac-alert" role="alert">
                         <span title={t('Skan widzi inny adres MAC niż zapisany')}>⚠ {t('widziany:')} {e.seen_mac}</span>
@@ -541,13 +549,13 @@ export function Network({ id, notify, reload, onEditNet, onDeleteNet }) {
                       <div class="mac-suggest">{t('wykryty:')} {e.seen_mac}{canEdit && <button class="link-btn" onClick={() => macAct(e, 'accept')}>{t('użyj')}</button>}</div>
                     )}
                   </td>}
-                  {cols.type && <td><span class="chip">{TYPE_LABELS[e.type]}</span></td>}
-                  <td>
+                  {cols.type && <td class="c-type"><span class="chip">{TYPE_LABELS[e.type]}</span></td>}
+                  <td class="c-status">
                     <select class={`status-select ${e.status}`} disabled={!canEdit} value={e.status} onChange={(ev) => patch(e, { status: ev.target.value })}>
                       {statusChoices(net, e.ip, e.status).map(([k, l]) => <option value={k}>{t(l)}</option>)}
                     </select>
                   </td>
-                  {cols.desc && <td><EditableCell readOnly={!canEdit} value={e.description} placeholder="—" onSave={(v) => patch(e, { description: v })} />
+                  {cols.desc && <td class={`c-desc${e.description || e.tags ? '' : ' none'}`}><EditableCell readOnly={!canEdit} value={e.description} placeholder="—" onSave={(v) => patch(e, { description: v })} />
                     {e.tags && <div class="tags">{e.tags.split(',').map((tg) => <button class="tag" onClick={() => setQ(tg)} title={t('Filtruj wpisy…')}>#{tg}</button>)}</div>}</td>}
                   <td class="row-actions">
                     <button class="icon-btn" onClick={() => setHist(e)} aria-label={t('Historia {ip}', { ip: e.ip })} title={t('Historia zmian')}><Icon name="history" size={16} /></button>
