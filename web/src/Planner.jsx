@@ -6,7 +6,9 @@ import { t, locale } from './i18n.js';
 const num = (n) => Number(n).toLocaleString(locale());
 const ipNum = (ip) => ip.split('.').reduce((a, o) => a * 256 + Number(o), 0);
 const span = (cidr) => { const [ip, p] = cidr.split('/'); const size = 2 ** (32 - Number(p)); const first = Math.floor(ipNum(ip) / size) * size; return { first, size }; };
-const hue = (siteId) => (Number(siteId) * 67) % 360;
+// Fixed, well separated colours per location (same hue family as the app palette) instead of a computed hue.
+const SITE_COLORS = ['#0b7f8a', '#d99a1c', '#6f4fe0', '#c2543d', '#3f8f4a', '#2e6bd1', '#b04a8f', '#8a7a2c'];
+const siteColor = (siteId) => SITE_COLORS[(Number(siteId) - 1 + SITE_COLORS.length * 1000) % SITE_COLORS.length];
 const sizeLabel = (size) => (size >= 1024 ? `${num(size)}` : String(size));
 
 function PoolForm({ tenantId, pool, onClose, onSaved, notify }) {
@@ -94,7 +96,7 @@ function PoolBar({ pool }) {
       {pool.allocations.map((n) => {
         const s = span(n.cidr);
         return <a key={n.id} href={`#/n/${n.id}`} class="pool-seg" title={`${n.cidr} · ${n.name} · ${n.site}`}
-          style={{ left: `${((s.first - p.first) / p.size) * 100}%`, width: `${Math.max(0.35, (s.size / p.size) * 100)}%`, background: `hsl(${hue(n.site_id)} 55% 50%)` }} />;
+          style={{ left: `${((s.first - p.first) / p.size) * 100}%`, width: `${Math.max(0.35, (s.size / p.size) * 100)}%`, background: siteColor(n.site_id) }} />;
       })}
     </div>
   );
@@ -133,7 +135,7 @@ function Pools({ plan, canEdit, reload, notify, setModal }) {
               <div class="table-wrap"><table>
                 <thead><tr><th>{t('Sieć')}</th><th>CIDR</th><th>{t('Lokalizacja')}</th><th>VLAN</th><th>{t('Użycie')}</th></tr></thead>
                 <tbody>{p.allocations.map((n) => (
-                  <tr><td><a href={`#/n/${n.id}`}><i class="site-dot" style={{ background: `hsl(${hue(n.site_id)} 55% 50%)` }} />{n.name}</a></td>
+                  <tr><td><a href={`#/n/${n.id}`}><i class="site-dot" style={{ background: siteColor(n.site_id) }} />{n.name}</a></td>
                     <td class="mono">{n.cidr}</td><td>{n.site}</td><td>{n.vlan ?? '—'}</td><td class="muted">{n.used}/{n.total}</td></tr>
                 ))}</tbody>
               </table></div>
@@ -152,7 +154,7 @@ function Pools({ plan, canEdit, reload, notify, setModal }) {
         );
       })}
       {siteIds.length > 1 && (
-        <div class="legend">{siteIds.map((id) => <span><i class="site-dot" style={{ background: `hsl(${hue(id)} 55% 50%)` }} />{plan.sites.find((s) => s.id === id)?.name}</span>)}</div>
+        <div class="legend">{siteIds.map((id) => <span><i class="site-dot" style={{ background: siteColor(id) }} />{plan.sites.find((s) => s.id === id)?.name}</span>)}</div>
       )}
       {plan.unpooled.length > 0 && (
         <section class="card">

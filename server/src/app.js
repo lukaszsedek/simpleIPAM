@@ -104,6 +104,11 @@ export function createApi(db, opts = {}) {
     for (const [mac, rows] of group(entries, 'mac')) {
       issues.push({ level: 'error', text: `Duplikat MAC ${mac}: ${rows.map((r) => r.ip).join(', ')}` });
     }
+    // A host showing up at a new address with the MAC of a known entry: the device moved (DHCP lease, manual change) or the address is used twice.
+    for (const d of all("SELECT * FROM discovered WHERE network_id=? AND dismissed=0 AND mac!='' AND ip!=?", net.id, net.gateway ?? '')) {
+      const known = entries.find((e) => e.mac && e.mac.toLowerCase() === d.mac.toLowerCase() && e.ip !== d.ip);
+      if (known) issues.push({ level: 'warn', text: `Nowy host ${d.ip} ma MAC ${d.mac} znanego urządzenia ${known.ip} (${known.fqdn || known.alias || 'bez nazwy'}) — zmienił adres albo ten sam sprzęt ma dwa adresy` });
+    }
     const siteEntries = all(`SELECT e.* FROM entries e JOIN networks n ON n.id=e.network_id WHERE n.site_id=? AND e.status!='free'`, net.site_id);
     for (const [fqdn, rows] of group(siteEntries, 'fqdn')) {
       if (rows.some((r) => r.network_id === net.id)) issues.push({ level: 'warn', text: `FQDN ${fqdn} występuje ${rows.length}× w lokalizacji: ${rows.map((r) => r.ip).join(', ')}` });
@@ -594,6 +599,22 @@ export function createApi(db, opts = {}) {
     need(user, net.site_id, 'reader');
     return all('SELECT * FROM discovered WHERE network_id=? AND dismissed=0 AND ip!=? ORDER BY id', net.id, net.gateway)
       .sort((a, b) => ipToInt(a.ip) - ipToInt(b.ip));
+  });
+  // What changed in the last N days: devices that appeared (first seen), devices not seen since (were alive before, silent now), entries added/removed.
+  route('GET', '/api/networks/:id/changes', ({ params, query, user }) => {
+    const net = must(one('SELECT * FROM networks WHERE id=?', params.id), 'Sieć');
+    need(user, net.site_id, 'reader');
+    const days = Math.min(90, Math.max(1, Number(query.days) || 1));
+    const since = `-${days} days`;
+    const appeared = all("SELECT ip, mac, first_seen FROM discovered WHERE network_id=? AND dismissed=0 AND ip!=? AND first_seen >= datetime('now', ?) ORDER BY first_seen DESC", net.id, net.gateway ?? '', since)
+      .sort((x, y) => ipToInt(x.ip) - ipToInt(y.ip));
+    // "Silent" only means something when scans are running: require at least one host seen within the window.
+    const scanned = one("SELECT COUNT(*) AS n FROM entries WHERE network_id=? AND last_seen >= datetime('now', ?)", net.id, since).n
+      + one("SELECT COUNT(*) AS n FROM discovered WHERE network_id=? AND last_seen >= datetime('now', ?)", net.id, since).n > 0;
+    const silent = !scanned ? [] : all("SELECT ip, fqdn, alias, last_seen FROM entries WHERE network_id=? AND status!='free' AND last_seen IS NOT NULL AND last_seen < datetime('now', ?) ORDER BY ip_num", net.id, since);
+    const added = all("SELECT ip, ts FROM entry_history WHERE network_id=? AND action='create' AND ts >= datetime('now', ?) ORDER BY ts DESC", net.id, since);
+    const removed = all("SELECT ip, ts FROM entry_history WHERE network_id=? AND action='delete' AND ts >= datetime('now', ?) ORDER BY ts DESC", net.id, since);
+    return { days, scanned, appeared, silent, added, removed };
   });
   route('POST', '/api/discovered/:id/dismiss', ({ params, user }) => {
     const d = must(one('SELECT * FROM discovered WHERE id=?', params.id), 'Wpis');

@@ -50,6 +50,7 @@ export const api = {
   createToken: (name) => req('POST', '/api/me/tokens', { name }),
   delToken: (id) => req('DELETE', `/api/me/tokens/${id}`),
   discovered: (id) => req('GET', `/api/networks/${id}/discovered`),
+  changes: (id, days) => req('GET', `/api/networks/${id}/changes?days=${days}`),
   dismiss: (id) => req('POST', `/api/discovered/${id}/dismiss`, {}),
   bulk: (netId, body) => req('POST', `/api/networks/${netId}/entries/bulk`, body),
   freeBlocks: (siteId, within, prefix) => req('GET', `/api/sites/${siteId}/free-blocks?within=${encodeURIComponent(within)}&prefix=${prefix}`),

@@ -332,6 +332,36 @@ test('scan records last_seen and discovered hosts; scheduler only scans auto_sca
   assert.equal((await admin('GET', `/api/networks/${auto.id}/discovered`)).length, 0);
 });
 
+test('a new host with the MAC of a known entry is flagged; changes lists appeared, silent, added and removed hosts', async () => {
+  const alive = new Set(['10.0.0.2', '10.0.0.9']);
+  const macs = new Map([['10.0.0.2', 'aa:aa:aa:aa:aa:01'], ['10.0.0.9', 'aa:aa:aa:aa:aa:02']]);
+  const db = openDb(':memory:');
+  const api = createApi(db, { ping: async (ip) => alive.has(ip), neighbors: async () => macs });
+  const admin = client(api);
+  await admin.register('admin');
+  const site = await mkSite(admin, 'dom2');
+  const net = await admin('POST', `/api/sites/${site.id}/networks`, { name: 'lan', cidr: '10.0.0.0/28' });
+  await admin('POST', `/api/networks/${net.id}/entries`, { ip: '10.0.0.2', fqdn: 'nas.lan', mac: 'aa:aa:aa:aa:aa:01' });
+  await admin('POST', `/api/networks/${net.id}/entries`, { ip: '10.0.0.5', fqdn: 'quiet.lan' });
+  await admin('POST', `/api/networks/${net.id}/scan`);
+  // pretend 10.0.0.5 was alive a week ago, 10.0.0.2 stays fresh
+  db.prepare("UPDATE entries SET last_seen=datetime('now','-5 days') WHERE ip='10.0.0.5'").run();
+  const day = await admin('GET', `/api/networks/${net.id}/changes`, {}, { days: 1 });
+  assert.deepEqual(day.appeared.map((d) => d.ip), ['10.0.0.9']);
+  assert.deepEqual(day.silent.map((e) => e.ip), ['10.0.0.5']);
+
+  macs.set('10.0.0.9', 'AA:AA:AA:AA:AA:01');           // a "new" host that carries the NAS's MAC
+  await admin('POST', `/api/networks/${net.id}/scan`);
+  const issues = await admin('GET', `/api/networks/${net.id}/issues`);
+  assert.ok(issues.some((i) => i.level === 'warn' && i.text.includes('10.0.0.9') && i.text.includes('10.0.0.2')));
+
+  const ch = await admin('GET', `/api/networks/${net.id}/changes`, {}, { days: 7 });
+  assert.equal(ch.days, 7);
+  assert.equal(ch.scanned, true);
+  assert.deepEqual(ch.added.map((a) => a.ip).sort(), ['10.0.0.2', '10.0.0.5']);
+  assert.deepEqual((await admin('GET', `/api/networks/${net.id}/changes`, {}, { days: 999 })).days, 90);
+});
+
 test('first run: setup screen flag, first account is Admin, later sign-ups start with no access until an admin assigns a role', async () => {
   const env = await boot0();
   const { newClient } = env;

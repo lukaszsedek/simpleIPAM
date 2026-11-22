@@ -1,6 +1,6 @@
 :root {
-  --bg: #eceff0; --surface: #f8f9f9; --surface-2: #e2e7e8; --border: #cfd6d8; --text: #15201f; --muted: #58696b;
-  --accent: #0b7f8a; --accent-soft: #d3ebed; --ok: #15803d; --warn: #b45f06; --danger: #c93c37;
+  --bg: #eceff0; --surface: #f8f9f9; --surface-2: #e2e7e8; --border: #cfd6d8; --text: #15201f; --muted: #4f6062;
+  --accent: #09707a; --accent-soft: #d3ebed; --ok: #15803d; --warn: #9c5205; --danger: #c93c37;
   --c-used: #0b7f8a; --c-reserved: #d99a1c; --c-dhcp: #b9d9d4; --c-gw: #6f4fe0; --c-free: #dfe4e5;
   --shadow: 0 1px 0 rgba(21,32,31,.04);
   --radius: 6px; --radius-sm: 4px;
@@ -80,18 +80,18 @@ main { min-width: 0; position: relative; }
 .stat b { font: 500 24px/1.2 var(--mono); letter-spacing: -.02em; }
 .bar { height: 6px; border-radius: 6px; background: var(--border); overflow: hidden; margin-top: 6px; }
 
-.ipmap { display: grid; grid-template-columns: 2.6em repeat(16, minmax(0, 1fr)); gap: 3px; max-width: 760px; }
+.ipmap { display: grid; grid-template-columns: 2.6em repeat(var(--per, 16), minmax(0, 1fr)); gap: 3px; max-width: calc(760px * var(--per, 16) / 16 + 2.6em); }
 .ipcell { position: relative; aspect-ratio: 1.75; min-width: 0; border: 0; padding: 0; border-radius: var(--radius-sm); background: var(--c-free);
   display: grid; place-items: center; font: 500 10px/1 var(--mono); color: var(--muted); transition: transform .12s; }
 .ipcell span { pointer-events: none; }
 .ipcell.used { background: var(--c-used); color: #fff; } .ipcell.reserved { background: var(--c-reserved); color: #1d1500; }
-.ipcell.dhcp { background: var(--c-dhcp); color: var(--muted); } .ipcell.gw { background: var(--c-gw); color: #fff; }
+.ipcell.dhcp { background: var(--c-dhcp); color: var(--text); } .ipcell.gw { background: var(--c-gw); color: #fff; }
 .ipcell.dynamic { color: #04202e; }
 :root[data-theme="dark"] .ipcell.used, :root[data-theme="dark"] .ipcell.gw { color: #051416; }
 .ipcell.pad { background: transparent; }
 .rowlab { align-self: center; font: 500 11px/1 var(--mono); color: var(--muted); text-align: right; padding-right: 6px; }
 button.ipcell:hover { transform: scale(1.12); z-index: 1; outline: 2px solid var(--text); outline-offset: 1px; }
-@media (max-width: 560px) { .ipcell { font-size: 8px; } .ipmap { gap: 2px; } }
+@media (max-width: 560px) { .ipcell { font-size: 10px; aspect-ratio: 1.4; } .ipmap { gap: 3px; } }
 .legend { display: flex; gap: 16px; flex-wrap: wrap; margin-top: 14px; color: var(--muted); font-size: 12px; }
 .legend span { display: inline-flex; align-items: center; gap: 6px; }
 .legend .ipcell { display: inline-block; width: 14px; height: 14px; aspect-ratio: auto; }
@@ -491,3 +491,28 @@ td .chip + .chip { margin-left: 4px; }
 .form-actions + .muted.small-text { margin-top: 12px; }
 
 @media (max-width: 560px) { .stat { border-left: 0; border-top: 1px solid var(--border); } .stat:first-child { border-top: 0; } }
+
+/* map <-> table linking, DHCP band, touch selection */
+.ipcell.hot { outline: 2px solid var(--text); outline-offset: 1px; z-index: 1; }
+tbody tr.hot td { background: var(--accent-soft); }
+.rowlab.pool { border-right: 3px solid var(--c-used); margin-right: 2px; }
+.ipcell.picked { outline: 2px solid var(--accent); outline-offset: 2px; }
+.cellbar { display: flex; align-items: center; gap: 12px; margin-top: 12px; padding: 8px 12px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface-2); }
+.cellbar .muted { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* a blank alias stays out of the way until the row is focused */
+.cell-wrap:has(.cell-input.alias:placeholder-shown) { display: none; }
+tr:focus-within .cell-wrap:has(.cell-input.alias:placeholder-shown) { display: block; }
+
+/* what changed */
+.changes h4 { margin: 0 0 6px; font-size: 13px; font-weight: 600; }
+.change-groups { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 18px; }
+.change-groups ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+.change-groups li { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
+
+/* bigger touch targets on coarse pointers */
+@media (pointer: coarse) {
+  .icon-btn { width: 40px; height: 40px; }
+  .btn.small { padding: 8px 12px; }
+  .segmented button, .tabs a { padding-top: 9px; padding-bottom: 9px; }
+}

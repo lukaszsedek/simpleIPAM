@@ -5,6 +5,17 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+### Added
+- "What changed" card on every network (last 24 h / 7 / 30 days): hosts that appeared, hosts that stopped responding, entries added and removed. Backed by `GET /api/networks/:id/changes`.
+- New warning in "To review" when a newly discovered host carries the MAC of a known entry at another address (device moved, or the same hardware has two addresses).
+- Hovering a map cell highlights its table row and the other way round; the DHCP pool is marked on the map's row labels.
+- On phones the map uses rows of 8 with larger cells, and the first tap only selects (a bar offers Edit / Add).
+
+### Changed
+- A blank alias field is hidden until the row is focused, so the table rows are about half as tall.
+- Location colours in the planner come from a fixed palette that matches the app.
+- Contrast raised to WCAG AA for text on the light theme (accent, warning, muted) and on DHCP map cells; bigger touch targets on coarse pointers.
+
 ## [0.13.0] - 2026-11-22
 
 ### Changed

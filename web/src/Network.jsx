@@ -141,6 +141,15 @@ function HistoryModal({ net, entry, onClose }) {
   );
 }
 
+// Hovering or focusing a map cell lights the matching table row and vice versa (both carry data-n = numeric address).
+let lit = [];
+const light = (n) => {
+  lit.forEach((x) => x.classList.remove('hot'));
+  lit = n == null ? [] : [...document.querySelectorAll(`[data-n="${n}"]`)];
+  lit.forEach((x) => x.classList.add('hot'));
+};
+const hotOf = (ev) => { const el = ev.target.closest?.('[data-n]'); light(el ? el.dataset.n : null); };
+
 const ago = (ts) => {
   if (!ts) return '—';
   const m = Math.round((Date.now() - new Date(ts.replace(' ', 'T') + 'Z')) / 60000);
@@ -200,6 +209,10 @@ function BulkBar({ count, onApply, onDelete, onClear }) {
 }
 
 function IpMap({ net, byNum, onPick }) {
+  // Phones get rows of 8 (bigger cells) and a first tap that only selects.
+  const narrow = typeof matchMedia === 'function' && matchMedia('(max-width: 560px)').matches;
+  const per = narrow ? 8 : 16;
+  const [sel, setSel] = useState(null);
   const [lo, hi] = useMemo(() => {
     const [a, p] = net.cidr.split('/');
     const size = 2 ** (32 - Number(p));
@@ -216,9 +229,10 @@ function IpMap({ net, byNum, onPick }) {
   const first = net.network_addr ? lo - 1 : lo;
   const wide = hi - lo > 255;
   const rowLabel = (n) => (wide ? `${(n >>> 8) & 255}.${n & 255}` : `.${n & 255}`);
-  const pad = first % 16;
+  const rowPool = (n) => ds >= 0 && n + per - 1 >= ds && n <= de;
+  const pad = first % per;
   const put = (n, node) => {
-    if (n % 16 === 0 || cells.length === 0) cells.push(<span key={`r${n}`} class="rowlab" aria-hidden="true">{rowLabel(n - (n % 16))}</span>);
+    if (n % per === 0 || cells.length === 0) cells.push(<span key={`r${n}`} class={`rowlab${rowPool(n - (n % per)) ? ' pool' : ''}`} aria-hidden="true" title={rowPool(n - (n % per)) ? 'DHCP' : undefined}>{rowLabel(n - (n % per))}</span>);
     if (cells.length === 1) for (let i = 0; i < pad; i++) cells.push(<span key={`p${i}`} class="ipcell pad" aria-hidden="true" />);
     cells.push(node);
   };
@@ -231,12 +245,18 @@ function IpMap({ net, byNum, onPick }) {
     else if (n === gw) cls = 'gw';
     else if (pool) cls = 'dhcp';
     const title = `${ipOf(n)}${e?.fqdn ? ` · ${e.fqdn}` : ''}${n === gw ? ` · ${t('brama')}` : ''}${!e && n >= ds && n <= de ? ' · DHCP' : ''}`;
-    put(n, <button key={n} class={`ipcell ${cls}`} title={title} aria-label={title} onClick={() => onPick(n, e)}><span aria-hidden="true">{n & 255}</span></button>);
+    put(n, <button key={n} data-n={n} class={`ipcell ${cls}${sel === n ? ' picked' : ''}`} title={title} aria-label={title} onClick={() => (narrow && sel !== n ? setSel(n) : onPick(n, e))}><span aria-hidden="true">{n & 255}</span></button>);
   }
   if (net.broadcast_addr) put(hi + 1, sys(hi + 1, t('adres rozgłoszeniowy (broadcast)')));
   return (
     <>
-      <div class="ipmap">{cells}</div>
+      <div class="ipmap" style={{ '--per': per }} role="group" aria-label={t('Mapa adresów')} onMouseOver={hotOf} onMouseLeave={() => light(null)} onFocusIn={hotOf} onFocusOut={() => light(null)}>{cells}</div>
+      {narrow && sel != null && (
+        <div class="cellbar">
+          <span class="mono">{ipOf(sel)}</span><span class="muted">{byNum.get(sel)?.fqdn ?? ''}</span>
+          <button class="btn small primary" onClick={() => onPick(sel, byNum.get(sel))}>{t(byNum.get(sel) ? 'Edytuj' : 'Dodaj')}</button>
+        </div>
+      )}
       <div class="legend">
         {[['used', 'Statyczny'], ['reserved', 'Rezerwacja DHCP'], ['dynamic', 'Dynamiczny'], ['dhcp', 'Pula DHCP'], ['gw', 'Brama'], ['sys', 'Sieć / broadcast'], ['free', 'Wolny']].map(([c, l]) => (
           <span><i class={`ipcell ${c}`} />{t(l)}</span>
@@ -256,6 +276,8 @@ export function Network({ id, notify, reload, onEditNet, onDeleteNet }) {
   const [hist, setHist] = useState(null);   // entry, or true for the whole network
   const [issues, setIssues] = useState([]);
   const [found, setFound] = useState([]);
+  const [chg, setChg] = useState(null);
+  const [chgDays, setChgDays] = useState(() => { try { return Number(localStorage.chgDays) || 1; } catch { return 1; } });
   const [sel, setSel] = useState(new Set());
   const [sort, setSort] = useState({ key: 'ip', dir: 1 });
   const [cols, setCols] = useState(() => { try { return { mac: true, type: true, desc: true, ...JSON.parse(localStorage.cols) }; } catch { return { mac: true, type: true, desc: true }; } });
@@ -265,9 +287,10 @@ export function Network({ id, notify, reload, onEditNet, onDeleteNet }) {
     api.network(id).then(setNet).catch((e) => notify(e.message, 'error'));
     api.issues(id).then(setIssues).catch(() => setIssues([]));
     api.discovered(id).then(setFound).catch(() => setFound([]));
+    api.changes(id, chgDays).then(setChg).catch(() => setChg(null));
     setSel(new Set());
   };
-  useEffect(() => { setNet(null); setQ(''); load(); }, [id]);
+  useEffect(() => { setNet(null); setQ(''); load(); }, [id, chgDays]);
   const refresh = () => { load(); reload(); };
 
   const byNum = useMemo(() => new Map((net?.entries ?? []).map((e) => [ipNum(e.ip), e])), [net]);
@@ -417,6 +440,30 @@ export function Network({ id, notify, reload, onEditNet, onDeleteNet }) {
         </section>
       )}
 
+      {chg && (chg.appeared.length + chg.silent.length + chg.added.length + chg.removed.length > 0 || chgDays > 1) && (
+        <section class="card changes">
+          <div class="card-head">
+            <h3>{t('Co się zmieniło')}</h3>
+            <div class="segmented" role="group" aria-label={t('Co się zmieniło')}>
+              {[[1, 'ostatnie 24 h'], [7, 'ostatnie 7 dni'], [30, 'ostatnie 30 dni']].map(([d, l]) => (
+                <button class={chgDays === d ? 'on' : ''} aria-pressed={chgDays === d} onClick={() => { setChgDays(d); try { localStorage.chgDays = d; } catch { /* not persisted */ } }}>{t(l)}</button>
+              ))}
+            </div>
+          </div>
+          {chg.appeared.length + chg.silent.length + chg.added.length + chg.removed.length === 0 && <p class="muted small-text">{t('Brak zmian w tym okresie.')}</p>}
+          <div class="change-groups">
+            {chg.appeared.length > 0 && <div><h4>{t('Pojawiły się')} ({chg.appeared.length})</h4>
+              <ul>{chg.appeared.map((d) => <li><span class="mono">{d.ip}</span><span class="muted small-text">{d.mac}</span></li>)}</ul></div>}
+            {chg.silent.length > 0 && <div><h4>{t('Przestały odpowiadać')} ({chg.silent.length})</h4>
+              <ul>{chg.silent.map((e) => <li><span class="mono">{e.ip}</span><span>{e.alias || e.fqdn}</span><span class="muted small-text">{t('ostatnio widziany {when}', { when: ago(e.last_seen) })}</span></li>)}</ul></div>}
+            {chg.added.length > 0 && <div><h4>{t('Dodane wpisy')} ({chg.added.length})</h4>
+              <ul>{chg.added.map((a) => <li><span class="mono">{a.ip}</span><span class="muted small-text">{ago(a.ts)}</span></li>)}</ul></div>}
+            {chg.removed.length > 0 && <div><h4>{t('Usunięte wpisy')} ({chg.removed.length})</h4>
+              <ul>{chg.removed.map((a) => <li><span class="mono">{a.ip}</span><span class="muted small-text">{ago(a.ts)}</span></li>)}</ul></div>}
+          </div>
+        </section>
+      )}
+
       <section class="card">
         <h3>{t('Mapa adresów')}</h3>
         <IpMap net={net} byNum={byNum} onPick={pick} />
@@ -476,7 +523,7 @@ export function Network({ id, notify, reload, onEditNet, onDeleteNet }) {
               {showSys && net.network_addr && sysRow('net', net.network_addr, t('Adres sieci'), t('zarezerwowany'))}
               {showSys && gwRow}
               {rows.map((e) => (
-                <tr key={e.id} class={sel.has(e.id) ? 'selected' : ''}>
+                <tr key={e.id} data-n={ipNum(e.ip)} class={sel.has(e.id) ? 'selected' : ''} onMouseEnter={() => light(ipNum(e.ip))} onMouseLeave={() => light(null)}>
                   {canEdit && <td class="check"><input type="checkbox" checked={sel.has(e.id)} onChange={() => toggle(e.id)} aria-label={t('Zaznacz {ip}', { ip: e.ip })} /></td>}
                   <td class="mono ip">{e.ip}<div class="muted small-text nowrap" title={e.last_seen ?? ''}>{e.last_seen ? ago(e.last_seen) : ''}</div></td>
                   <td class="name-cell"><EditableCell readOnly={!canEdit} value={e.fqdn} placeholder="FQDN" onSave={(v) => patch(e, { fqdn: v })} />
