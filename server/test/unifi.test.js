@@ -128,7 +128,7 @@ test('sync keeps what the user already has: existing network is only filled in, 
   const ctx = await setup(); const { call, f, tenant } = ctx;
   await connect(ctx);
   const site = await call('POST', `/api/tenants/${tenant.id}/sites`, { name: 'Cloud Gateway Fiber' });
-  const mine = await call('POST', `/api/sites/${site.id}/networks`, { name: 'Moja sieć', cidr: '192.168.1.0/24', description: 'ręczny opis' });
+  const mine = await call('POST', `/api/sites/${site.id}/networks`, { name: 'Moja sieć', vlan: 1, cidr: '192.168.1.0/24', description: 'ręczny opis' });
   await call('POST', `/api/networks/${mine.id}/entries`, { ip: '192.168.1.10', fqdn: 'serwer.lan', mac: 'aa:bb:cc:00:00:01', type: 'server' });
   f.clients = [{ id: 'c1', name: 'nas', ipAddress: '192.168.1.10', macAddress: 'aa:bb:cc:00:00:77', type: 'WIRED' }];
   await call('POST', '/api/admin/unifi/sync');

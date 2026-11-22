@@ -30,7 +30,7 @@ const setup = async () => {
 const seed = async (admin) => {
   const t = await admin('POST', '/api/tenants', { name: 'rodzina' });
   const s = await admin('POST', `/api/tenants/${t.id}/sites`, { name: 'dom1' });
-  const n = await admin('POST', `/api/sites/${s.id}/networks`, { name: 'LAN', cidr: '10.0.0.0/24' });
+  const n = await admin('POST', `/api/sites/${s.id}/networks`, { name: 'LAN', vlan: 101, cidr: '10.0.0.0/24' });
   await admin('POST', `/api/networks/${n.id}/entries`, { ip: '10.0.0.5', fqdn: 'nas.lan' });
   return { t, s, n };
 };

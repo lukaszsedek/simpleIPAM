@@ -94,7 +94,7 @@ function NetworkForm({ net, siteId, onClose, onSaved, notify }) {
       <form class="form-grid" onSubmit={submit}>
         <Field label="Nazwa"><input value={f.name} onInput={set('name')} placeholder={tx('LAN, IoT, Goście…')} required /></Field>
         <Field label="CIDR"><input class="mono" value={f.cidr} onInput={set('cidr')} placeholder="192.168.10.0/24" required /></Field>
-        <Field label="VLAN"><input type="number" min="1" max="4094" value={f.vlan ?? ''} onInput={set('vlan')} /></Field>
+        <Field label="VLAN"><input type="number" min="1" max="4094" value={f.vlan ?? ''} onInput={set('vlan')} required /></Field>
         <Field label="Brama">
           <input class="mono" value={f.gateway} onInput={set('gateway')} placeholder={gwOf(f.cidr, false) || '192.168.10.1'} />
           {gwOf(f.cidr, false) && <span class="gw-pick">

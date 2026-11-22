@@ -16,7 +16,7 @@ async function setup() {
   await admin('POST', '/api/auth/register', { username: 'admin', password: 'password123' });
   const t = await admin('POST', '/api/tenants', { name: 'home' });
   const site = await admin('POST', `/api/tenants/${t.id}/sites`, { name: 'dom' });
-  const net = await admin('POST', `/api/sites/${site.id}/networks`, { name: 'lan', cidr: '10.0.0.0/28' });
+  const net = await admin('POST', `/api/sites/${site.id}/networks`, { name: 'lan', vlan: 101, cidr: '10.0.0.0/28' });
   return { api, admin, alive, arp, net, dns };
 }
 

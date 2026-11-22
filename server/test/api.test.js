@@ -72,7 +72,7 @@ test('validation', async () => {
   const { admin } = await boot();
   const site = await mkSite(admin, 's');
   await assert.rejects(admin('POST', `/api/sites/${site.id}/networks`, { name: 'x', cidr: 'nope' }), /CIDR/);
-  const net = await admin('POST', `/api/sites/${site.id}/networks`, { name: 'x', cidr: '10.0.0.0/24' });
+  const net = await admin('POST', `/api/sites/${site.id}/networks`, { name: 'x', vlan: 102, cidr: '10.0.0.0/24' });
   await assert.rejects(admin('POST', `/api/networks/${net.id}/entries`, { ip: '10.0.1.5' }), /należeć/);
   await admin('POST', `/api/networks/${net.id}/entries`, { ip: '10.0.0.5' });
   await assert.rejects(admin('POST', `/api/networks/${net.id}/entries`, { ip: '10.0.0.5' }), /już wpisany/);
@@ -81,7 +81,7 @@ test('validation', async () => {
 test('csv export/import roundtrip', async () => {
   const { admin } = await boot();
   const site = await mkSite(admin, 's');
-  const net = await admin('POST', `/api/sites/${site.id}/networks`, { name: 'x', cidr: '10.0.0.0/24' });
+  const net = await admin('POST', `/api/sites/${site.id}/networks`, { name: 'x', vlan: 103, cidr: '10.0.0.0/24' });
   const r = await admin('POST', `/api/networks/${net.id}/import`, { csv: 'ip,fqdn,description\n10.0.0.5,a.lan,"with, comma"\n10.9.9.9,bad,\n' });
   assert.equal(r.added, 1);
   assert.equal(r.errors.length, 1);
@@ -118,8 +118,8 @@ test('roles: global vs site, site-level overrides, none denies', async () => {
   const bobId = (await admin('GET', '/api/users')).find((u) => u.username === 'bob').id;
   const s1 = await mkSite(admin, 'dom1');
   const s2 = await mkSite(admin, 'lab2');
-  const n1 = await admin('POST', `/api/sites/${s1.id}/networks`, { name: 'LAN', cidr: '10.1.0.0/24' });
-  const n2 = await admin('POST', `/api/sites/${s2.id}/networks`, { name: 'LAN', cidr: '10.2.0.0/24' });
+  const n1 = await admin('POST', `/api/sites/${s1.id}/networks`, { name: 'LAN', vlan: 104, cidr: '10.1.0.0/24' });
+  const n2 = await admin('POST', `/api/sites/${s2.id}/networks`, { name: 'LAN', vlan: 105, cidr: '10.2.0.0/24' });
   const grant = (siteId, role) => admin('PUT', `/api/users/${bobId}/roles`, { site_id: siteId, role });
 
   await assert.rejects(bob('GET', `/api/networks/${n1.id}`), /uprawnień/);
@@ -133,11 +133,11 @@ test('roles: global vs site, site-level overrides, none denies', async () => {
   await grant(s1.id, 'contributor');
   const e = await bob('POST', `/api/networks/${n1.id}/entries`, { ip: '10.1.0.5', fqdn: 'a.lan' });
   await bob('PUT', `/api/entries/${e.id}`, { ip: '10.1.0.5', fqdn: 'b.lan' });
-  await assert.rejects(bob('PUT', `/api/networks/${n1.id}`, { name: 'x', cidr: '10.1.0.0/24' }), /uprawnień/);
+  await assert.rejects(bob('PUT', `/api/networks/${n1.id}`, { name: 'x', vlan: 5, cidr: '10.1.0.0/24' }), /uprawnień/);
   assert.deepEqual(await bob('GET', '/api/search', {}, { q: 'lan' }).then((r) => r.map((x) => x.site_name)), ['dom1']);
 
   await grant(s1.id, 'admin');
-  await bob('PUT', `/api/networks/${n1.id}`, { name: 'LAN2', cidr: '10.1.0.0/24' });
+  await bob('PUT', `/api/networks/${n1.id}`, { name: 'LAN2', vlan: 5, cidr: '10.1.0.0/24' });
   await assert.rejects(bob('DELETE', `/api/sites/${s1.id}`), /uprawnień/);
   await assert.rejects(bob('GET', '/api/users'), /uprawnień/);
   await assert.rejects(bob('GET', '/api/audit'), /uprawnień/);
@@ -207,8 +207,8 @@ test('tenants: hierarchy global -> tenant -> site, most specific role wins', asy
 test('issues detect duplicates, DHCP overlap and overlapping networks', async () => {
   const { admin } = await boot();
   const site = await mkSite(admin, 'dom1');
-  const net = await admin('POST', `/api/sites/${site.id}/networks`, { name: 'LAN', cidr: '10.0.0.0/24', dhcp_start: '10.0.0.100', dhcp_end: '10.0.0.150' });
-  await admin('POST', `/api/sites/${site.id}/networks`, { name: 'Overlap', cidr: '10.0.0.0/25' });
+  const net = await admin('POST', `/api/sites/${site.id}/networks`, { name: 'LAN', vlan: 106, cidr: '10.0.0.0/24', dhcp_start: '10.0.0.100', dhcp_end: '10.0.0.150' });
+  await admin('POST', `/api/sites/${site.id}/networks`, { name: 'Overlap', vlan: 107, cidr: '10.0.0.0/25' });
   await admin('POST', `/api/networks/${net.id}/entries`, { ip: '10.0.0.10', fqdn: 'a.lan', mac: 'aa:aa:aa:aa:aa:aa' });
   await admin('POST', `/api/networks/${net.id}/entries`, { ip: '10.0.0.11', fqdn: 'a.lan', mac: 'aa:aa:aa:aa:aa:aa' });
   await admin('POST', `/api/networks/${net.id}/entries`, { ip: '10.0.0.120', fqdn: 'b.lan' });
@@ -228,7 +228,7 @@ test('dns exports, backup, registration switch', async () => {
   const env = await boot();
   const { admin, newClient } = env;
   const site = await mkSite(admin, 'dom1');
-  const net = await admin('POST', `/api/sites/${site.id}/networks`, { name: 'LAN', cidr: '10.0.0.0/24' });
+  const net = await admin('POST', `/api/sites/${site.id}/networks`, { name: 'LAN', vlan: 108, cidr: '10.0.0.0/24' });
   await admin('POST', `/api/networks/${net.id}/entries`, { ip: '10.0.0.5', fqdn: 'nas.home.lan', mac: 'aa:bb:cc:dd:ee:ff' });
   assert.match((await admin('GET', `/api/networks/${net.id}/export/hosts`)).raw, /10\.0\.0\.5\tnas\.home\.lan nas/);
   const dm = (await admin('GET', `/api/networks/${net.id}/export/dnsmasq`)).raw;
@@ -275,8 +275,8 @@ test('api tokens: bearer auth carries user roles, shown once, session-only manag
 test('free blocks skip networks of the site', async () => {
   const { admin } = await boot();
   const site = await mkSite(admin, 'dom1');
-  await admin('POST', `/api/sites/${site.id}/networks`, { name: 'a', cidr: '10.0.0.0/24' });
-  await admin('POST', `/api/sites/${site.id}/networks`, { name: 'b', cidr: '10.0.1.128/25' });
+  await admin('POST', `/api/sites/${site.id}/networks`, { name: 'a', vlan: 109, cidr: '10.0.0.0/24' });
+  await admin('POST', `/api/sites/${site.id}/networks`, { name: 'b', vlan: 110, cidr: '10.0.1.128/25' });
   const free = await admin('GET', `/api/sites/${site.id}/free-blocks`, {}, { within: '10.0.0.0/16', prefix: '24' });
   assert.deepEqual(free.slice(0, 3), ['10.0.2.0/24', '10.0.3.0/24', '10.0.4.0/24']);
   const small = await admin('GET', `/api/sites/${site.id}/free-blocks`, {}, { within: '10.0.1.0/24', prefix: '26' });
@@ -288,7 +288,7 @@ test('bulk update/delete', async () => {
   const env = await boot();
   const { admin } = env;
   const site = await mkSite(admin, 'dom1');
-  const net = await admin('POST', `/api/sites/${site.id}/networks`, { name: 'x', cidr: '10.0.0.0/24' });
+  const net = await admin('POST', `/api/sites/${site.id}/networks`, { name: 'x', vlan: 111, cidr: '10.0.0.0/24' });
   const ids = [];
   for (const ip of ['10.0.0.2', '10.0.0.3', '10.0.0.4']) ids.push((await admin('POST', `/api/networks/${net.id}/entries`, { ip, tags: 'a' })).id);
   const r = await admin('POST', `/api/networks/${net.id}/entries/bulk`, { ids: ids.slice(0, 2), action: 'update', changes: { type: 'iot', status: 'reserved', add_tags: 'Kuchnia, a' } });
@@ -308,8 +308,8 @@ test('scan records last_seen and discovered hosts; scheduler only scans auto_sca
   const admin = client(api);
   await admin.register('admin');
   const site = await mkSite(admin, 'dom1');
-  const manual = await admin('POST', `/api/sites/${site.id}/networks`, { name: 'manual', cidr: '10.0.0.0/28' });
-  const auto = await admin('POST', `/api/sites/${site.id}/networks`, { name: 'auto', cidr: '10.0.1.0/28', auto_scan: true });
+  const manual = await admin('POST', `/api/sites/${site.id}/networks`, { name: 'manual', vlan: 112, cidr: '10.0.0.0/28' });
+  const auto = await admin('POST', `/api/sites/${site.id}/networks`, { name: 'auto', vlan: 113, cidr: '10.0.1.0/28', auto_scan: true });
   await admin('POST', `/api/networks/${manual.id}/entries`, { ip: '10.0.0.2', fqdn: 'known.lan' });
 
   const res = await admin('POST', `/api/networks/${manual.id}/scan`);
@@ -340,7 +340,7 @@ test('a new host with the MAC of a known entry is flagged; changes lists appeare
   const admin = client(api);
   await admin.register('admin');
   const site = await mkSite(admin, 'dom2');
-  const net = await admin('POST', `/api/sites/${site.id}/networks`, { name: 'lan', cidr: '10.0.0.0/28' });
+  const net = await admin('POST', `/api/sites/${site.id}/networks`, { name: 'lan', vlan: 114, cidr: '10.0.0.0/28' });
   await admin('POST', `/api/networks/${net.id}/entries`, { ip: '10.0.0.2', fqdn: 'nas.lan', mac: 'aa:aa:aa:aa:aa:01' });
   await admin('POST', `/api/networks/${net.id}/entries`, { ip: '10.0.0.5', fqdn: 'quiet.lan' });
   await admin('POST', `/api/networks/${net.id}/scan`);
@@ -371,7 +371,7 @@ test('notifications: new hosts, moved devices and MAC changes are batched into o
   const admin = client(api);
   await admin.register('admin');
   const site = await mkSite(admin, 'dom3');
-  const net = await admin('POST', `/api/sites/${site.id}/networks`, { name: 'lan', cidr: '10.0.0.0/28' });
+  const net = await admin('POST', `/api/sites/${site.id}/networks`, { name: 'lan', vlan: 115, cidr: '10.0.0.0/28' });
   await admin('POST', `/api/networks/${net.id}/entries`, { ip: '10.0.0.2', fqdn: 'nas.lan', mac: 'aa:aa:aa:aa:aa:01' });
 
   assert.equal((await admin('GET', '/api/admin/notify')).enabled, false);
@@ -460,7 +460,7 @@ test('xlsx export is a valid zip workbook; aggregated issues list spans networks
     await c('POST', '/api/auth/register', { username: 'admin', password: 'password123' });
     const t = await c('POST', '/api/tenants', { name: 'home' });
     const site = await c('POST', `/api/tenants/${t.id}/sites`, { name: 'dom' });
-    const net = await c('POST', `/api/sites/${site.id}/networks`, { name: 'LAN', cidr: '10.0.0.0/24', dhcp_start: '10.0.0.100', dhcp_end: '10.0.0.150' });
+    const net = await c('POST', `/api/sites/${site.id}/networks`, { name: 'LAN', vlan: 116, cidr: '10.0.0.0/24', dhcp_start: '10.0.0.100', dhcp_end: '10.0.0.150' });
     return { admin: c, net };
   })();
   await admin('POST', `/api/networks/${net.id}/entries`, { ip: '10.0.0.5', fqdn: 'a.lan', alias: 'zażółć & <b>', status: 'used' });
@@ -494,7 +494,7 @@ test('gateway is not a new host; network and broadcast addresses cannot be entri
   const admin = client(api);
   await admin.register('admin');
   const site = await mkSite(admin, 'dom1');
-  const net = await admin('POST', `/api/sites/${site.id}/networks`, { name: 'lan', cidr: '10.5.0.0/24', gateway: 'first' });
+  const net = await admin('POST', `/api/sites/${site.id}/networks`, { name: 'lan', vlan: 117, cidr: '10.5.0.0/24', gateway: 'first' });
   assert.equal(net.gateway, '10.5.0.1');
   const res = await admin('POST', `/api/networks/${net.id}/scan`);
   assert.deepEqual(res.alive.map((h) => [h.ip, h.known]), [['10.5.0.1', true], ['10.5.0.9', false]]);
@@ -509,10 +509,10 @@ test('gateway is not a new host; network and broadcast addresses cannot be entri
   assert.equal(full.stats.infra, 1);
   await assert.rejects(admin('POST', `/api/networks/${net.id}/entries`, { ip: '10.5.0.0' }), /adres sieci/);
   await assert.rejects(admin('POST', `/api/networks/${net.id}/entries`, { ip: '10.5.0.255' }), /rozgłoszeniowy/);
-  await assert.rejects(admin('PUT', `/api/networks/${net.id}`, { name: 'lan', cidr: '10.5.0.0/24', gateway: '10.5.0.255' }), /Brama nie może/);
-  const last = await admin('PUT', `/api/networks/${net.id}`, { name: 'lan', cidr: '10.5.0.0/24', gateway: 'last' });
+  await assert.rejects(admin('PUT', `/api/networks/${net.id}`, { name: 'lan', vlan: 5, cidr: '10.5.0.0/24', gateway: '10.5.0.255' }), /Brama nie może/);
+  const last = await admin('PUT', `/api/networks/${net.id}`, { name: 'lan', vlan: 5, cidr: '10.5.0.0/24', gateway: 'last' });
   assert.equal(last.gateway, '10.5.0.254');
-  await admin('PUT', `/api/networks/${net.id}`, { name: 'lan', cidr: '10.5.0.0/24', gateway: '10.5.0.1', dhcp_start: '10.5.0.1', dhcp_end: '10.5.0.50' });
+  await admin('PUT', `/api/networks/${net.id}`, { name: 'lan', vlan: 5, cidr: '10.5.0.0/24', gateway: '10.5.0.1', dhcp_start: '10.5.0.1', dhcp_end: '10.5.0.50' });
   assert.ok((await admin('GET', `/api/networks/${net.id}/issues`)).some((i) => /Brama 10\.5\.0\.1 leży w puli DHCP/.test(i.text)));
 });
 
@@ -523,35 +523,34 @@ test('planning: pools, allocation to locations, conflicts, VLAN registry and per
   const a = await mkSite(admin, 'dom1');
   const b = await mkSite(admin, 'dom2');
   const tenantId = a.tenant_id;
-  const pool = await admin('POST', `/api/tenants/${tenantId}/pools`, { cidr: '10.0.0.0/8', name: 'Korpo' });
-  await assert.rejects(admin('POST', `/api/tenants/${tenantId}/pools`, { cidr: '10.1.0.0/16' }), /nakłada się z pulą/);
+  await assert.rejects(admin('POST', `/api/tenants/${tenantId}/pools`, { cidr: '10.0.0.0/8' }), /lokalizację/);   // a pool always belongs to a site
+  const pool = await admin('POST', `/api/tenants/${tenantId}/pools`, { site_id: a.id, cidr: '10.0.0.0/8', name: 'Korpo' });
+  await assert.rejects(admin('POST', `/api/tenants/${tenantId}/pools`, { site_id: a.id, cidr: '10.1.0.0/16' }), /nakłada się z pulą/);
   assert.equal((await admin('GET', `/api/pools/${pool.id}/suggest`, {}, { prefix: 24 })).cidr, '10.0.0.0/24');
 
-  const n1 = await admin('POST', `/api/pools/${pool.id}/allocate`, { site_id: a.id, name: 'LAN', prefix: 24, vlan: 10 });
+  const n1 = await admin('POST', `/api/pools/${pool.id}/allocate`, { name: 'LAN', prefix: 24, vlan: 10 });
   assert.equal(n1.cidr, '10.0.0.0/24');
+  assert.equal(n1.site_id, a.id);                 // the network lands in the pool's site
   assert.equal(n1.gateway, '10.0.0.1');
-  const n2 = await admin('POST', `/api/pools/${pool.id}/allocate`, { site_id: b.id, name: 'IoT', prefix: 23, vlan: 20 });
+  await assert.rejects(admin('POST', `/api/pools/${pool.id}/allocate`, { name: 'x', prefix: 24 }), /VLAN jest wymagany/);
+  await assert.rejects(admin('POST', `/api/pools/${pool.id}/allocate`, { name: 'x', prefix: 24, vlan: 10 }), /VLAN 10 jest już używany/);
+  const n2 = await admin('POST', `/api/pools/${pool.id}/allocate`, { name: 'IoT', prefix: 23, vlan: 20 });
   assert.equal(n2.cidr, '10.0.2.0/23');          // /23 must be aligned, so it skips .1.0
-  await assert.rejects(admin('POST', `/api/pools/${pool.id}/allocate`, { site_id: b.id, name: 'x', cidr: '10.0.0.128/25' }), /nakłada się/);
-  await assert.rejects(admin('POST', `/api/pools/${pool.id}/allocate`, { site_id: b.id, name: 'x', cidr: '192.168.0.0/24' }), /poza pulą/);
-
-  await admin('POST', `/api/tenants/${tenantId}/vlans`, { vid: 10, name: 'LAN' });
-  await assert.rejects(admin('POST', `/api/tenants/${tenantId}/vlans`, { vid: 10, name: 'dup', site_id: a.id }), /już zdefiniowany/);
-  await assert.rejects(admin('POST', `/api/tenants/${tenantId}/vlans`, { vid: 5000, name: 'bad' }), /1–4094/);
+  await assert.rejects(admin('POST', `/api/pools/${pool.id}/allocate`, { name: 'x', cidr: '10.0.0.128/25', vlan: 30 }), /nakłada się/);
+  await assert.rejects(admin('POST', `/api/pools/${pool.id}/allocate`, { name: 'x', cidr: '192.168.0.0/24', vlan: 30 }), /poza pulą/);
 
   const plan = await admin('GET', `/api/tenants/${tenantId}/plan`);
   const p = plan.pools[0];
+  assert.equal(p.site_id, a.id);
   assert.equal(p.allocated, 256 + 512);
   assert.equal(p.free, 2 ** 24 - 768);
   assert.deepEqual(p.allocations.map((x) => x.cidr), ['10.0.0.0/24', '10.0.2.0/23']);
   assert.equal(p.free_blocks[0].cidr, '10.0.1.0/24');
-  assert.deepEqual(plan.unregistered.map((u) => u.vid), [20]);
-  assert.equal(plan.vlans[0].networks.length, 1);
+  assert.equal(plan.vlans, undefined);
   assert.equal(plan.unpooled.length, 0);
-  assert.ok((await admin('GET', `/api/networks/${n2.id}/issues`)).some((i) => /VLAN 20 nie jest zdefiniowany/.test(i.text)));
 
   // an overlapping network created by hand in another location shows up as a conflict
-  await admin('POST', `/api/sites/${b.id}/networks`, { name: 'dup', cidr: '10.0.0.0/25' });
+  await admin('POST', `/api/sites/${b.id}/networks`, { name: 'dup', vlan: 118, cidr: '10.0.0.0/25' });
   assert.ok((await admin('GET', `/api/tenants/${tenantId}/plan`)).conflicts.some((c) => c.kind === 'overlap'));
 
   const reader = client(api);

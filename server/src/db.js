@@ -1,6 +1,7 @@
 import { DatabaseSync } from 'node:sqlite';
 import { mkdirSync, renameSync, rmSync } from 'node:fs';
 import { dirname } from 'node:path';
+import { parseCidr } from './ip.js';
 
 // Databases created before tenants existed have no sites.tenant_id / role_assignments.tenant_id.
 // Existing sites move into a "Domyślny" tenant and every role assignment is kept. A snapshot is
@@ -173,7 +174,7 @@ function openRaw(path) {
       CHECK (tenant_id IS NULL OR site_id IS NULL)
     );
     -- Address space planning: a pool is a big block (10.0.0.0/8) a tenant hands out to its sites as subnets;
-    -- the VLAN registry (site_id NULL = valid in every site of the tenant). networks.vlan stays a plain number that is matched to it.
+    -- Every pool belongs to a site (pools.site_id, added below); a network is a VLAN id + subnet, there is no separate VLAN registry.
     CREATE TABLE IF NOT EXISTS pools (
       id INTEGER PRIMARY KEY,
       tenant_id INTEGER NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
@@ -182,15 +183,6 @@ function openRaw(path) {
       description TEXT NOT NULL DEFAULT '',
       UNIQUE (tenant_id, cidr)
     );
-    CREATE TABLE IF NOT EXISTS vlans (
-      id INTEGER PRIMARY KEY,
-      tenant_id INTEGER NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
-      site_id INTEGER REFERENCES sites(id) ON DELETE CASCADE,
-      vid INTEGER NOT NULL CHECK (vid BETWEEN 1 AND 4094),
-      name TEXT NOT NULL,
-      description TEXT NOT NULL DEFAULT ''
-    );
-    CREATE UNIQUE INDEX IF NOT EXISTS idx_vlans_unique ON vlans(tenant_id, COALESCE(site_id, 0), vid);
     CREATE UNIQUE INDEX IF NOT EXISTS idx_roles_unique ON role_assignments(user_id, COALESCE(tenant_id, 0), COALESCE(site_id, 0));
   `);
   const addColumn = (table, col, ddl) => {
@@ -213,6 +205,21 @@ function openRaw(path) {
   addColumn('networks', 'gateway_mac', "TEXT NOT NULL DEFAULT ''");   // MAC a scan saw at the gateway address
   addColumn('networks', 'gateway_seen', 'TEXT');
   addColumn('networks', 'auto_scan', 'INTEGER NOT NULL DEFAULT 0');
+  addColumn('pools', 'site_id', 'INTEGER REFERENCES sites(id) ON DELETE SET NULL');
+  // Older pools floated at tenant level: hand each to the site that already holds most of its networks (else the first site).
+  // The legacy `vlans` registry table is left in place, unused, so no data is lost.
+  for (const p of db.prepare('SELECT * FROM pools WHERE site_id IS NULL').all()) {
+    const nets = db.prepare('SELECT n.site_id, n.cidr FROM networks n JOIN sites s ON s.id=n.site_id WHERE s.tenant_id=?').all(p.tenant_id);
+    const pc = parseCidr(p.cidr);
+    const count = new Map();
+    for (const n of nets) {
+      const c = parseCidr(n.cidr);
+      if (c && pc && c.first >= pc.first && c.last <= pc.last) count.set(n.site_id, (count.get(n.site_id) ?? 0) + 1);
+    }
+    const best = [...count.entries()].sort((x, y) => y[1] - x[1] || x[0] - y[0])[0]?.[0]
+      ?? db.prepare('SELECT id FROM sites WHERE tenant_id=? ORDER BY id LIMIT 1').get(p.tenant_id)?.id ?? null;
+    if (best != null) db.prepare('UPDATE pools SET site_id=? WHERE id=?').run(best, p.id);
+  }
   if (!db.prepare('PRAGMA table_info(audit)').all().some((c) => c.name === 'actor')) {
     db.exec("ALTER TABLE audit ADD COLUMN actor TEXT NOT NULL DEFAULT ''");
   }

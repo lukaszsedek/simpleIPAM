@@ -83,8 +83,6 @@ export const api = {
   delPool: (id) => req('DELETE', `/api/pools/${id}`),
   suggestBlock: (poolId, prefix) => req('GET', `/api/pools/${poolId}/suggest?prefix=${prefix}`),
   allocate: (poolId, body) => req('POST', `/api/pools/${poolId}/allocate`, body),
-  saveVlan: (tenantId, v) => (v.id ? req('PUT', `/api/vlans/${v.id}`, v) : req('POST', `/api/tenants/${tenantId}/vlans`, v)),
-  delVlan: (id) => req('DELETE', `/api/vlans/${id}`),
   unifiDiagnose: () => req('POST', '/api/admin/unifi/diagnose', {}),
   azure: () => req('GET', '/api/admin/azure'),
   saveAzure: (c) => req('PUT', '/api/admin/azure', c),

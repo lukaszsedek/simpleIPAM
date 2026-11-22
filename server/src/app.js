@@ -71,11 +71,9 @@ export function createApi(db, opts = {}) {
     const cidr = normalizeCidr(b.cidr);
     if (!cidr) throw bad('Nieprawidłowy CIDR (np. 192.168.1.0/24, min. /8)');
     if (parseCidr(cidr).prefix < 16) throw bad('Maksymalny rozmiar sieci to /16');
-    let vlan = null;
-    if (b.vlan !== '' && b.vlan != null) {
-      vlan = Number(b.vlan);
-      if (!Number.isInteger(vlan) || vlan < 1 || vlan > 4094) throw bad('VLAN musi być w zakresie 1–4094');
-    }
+    const vlan = Number(b.vlan);
+    if (b.vlan === '' || b.vlan == null) throw bad('VLAN jest wymagany (1–4094)');
+    if (!Number.isInteger(vlan) || vlan < 1 || vlan > 4094) throw bad('VLAN musi być w zakresie 1–4094');
     const ipField = (key, label) => {
       const v = str(b[key], 15);
       if (v && !inCidr(v, cidr)) throw bad(`${label} musi należeć do sieci ${cidr}`);
@@ -142,12 +140,8 @@ export function createApi(db, opts = {}) {
     if (net.gateway && net.dhcp_start && ipToInt(net.gateway) >= ipToInt(net.dhcp_start) && ipToInt(net.gateway) <= ipToInt(net.dhcp_end)) {
       issues.push({ level: 'warn', text: `Brama ${net.gateway} leży w puli DHCP — serwer DHCP może oddać ją innemu urządzeniu` });
     }
-    if (net.vlan) {
-      const tenantId = tenantIdOf(net.site_id);
-      const registry = all('SELECT * FROM vlans WHERE tenant_id=?', tenantId);
-      if (registry.length && !registry.some((v) => v.vid === net.vlan && (v.site_id == null || v.site_id === net.site_id))) {
-        issues.push({ level: 'info', text: `VLAN ${net.vlan} nie jest zdefiniowany w rejestrze VLAN-ów tenanta` });
-      }
+    if (!net.vlan) issues.push({ level: 'warn', text: 'Sieć nie ma przypisanego VLAN-u' });
+    else {
       for (const o of all('SELECT name, cidr FROM networks WHERE site_id=? AND id!=? AND vlan=?', net.site_id, net.id, net.vlan)) {
         issues.push({ level: 'warn', text: `VLAN ${net.vlan} jest przypisany także do sieci „${o.name}” (${o.cidr}) w tej samej lokalizacji` });
       }
@@ -410,10 +404,16 @@ export function createApi(db, opts = {}) {
     return { ok: true };
   });
 
+  // A VLAN id is one subnet within a location.
+  function vlanFree(siteId, vlan, selfId = 0) {
+    const o = one('SELECT name, cidr FROM networks WHERE site_id=? AND vlan=? AND id!=?', siteId, vlan, selfId);
+    if (o) throw new HttpError(409, `VLAN ${vlan} jest już używany przez sieć „${o.name}” (${o.cidr}) w tej lokalizacji`);
+  }
   route('POST', '/api/sites/:id/networks', ({ params, body, user }) => unique(() => {
     must(one('SELECT id FROM sites WHERE id=?', params.id), 'Lokalizacja');
     need(user, Number(params.id), 'admin');
     const n = netInput(body);
+    vlanFree(Number(params.id), n.vlan);
     const r = run(`INSERT INTO networks (site_id, name, cidr, vlan, gateway, dhcp_start, dhcp_end, dns, description, auto_scan)
       VALUES (?,?,?,?,?,?,?,?,?,?)`, params.id, n.name, n.cidr, n.vlan, n.gateway, n.dhcp_start, n.dhcp_end, n.dns, n.description, n.auto_scan);
     log('create', 'network', `${n.name} (${n.cidr})`);
@@ -423,6 +423,7 @@ export function createApi(db, opts = {}) {
     const old = must(one('SELECT * FROM networks WHERE id=?', params.id), 'Sieć');
     need(user, old.site_id, 'admin');
     const n = netInput(body);
+    vlanFree(old.site_id, n.vlan, old.id);
     if (n.cidr !== old.cidr) {
       const out = all('SELECT ip FROM entries WHERE network_id=?', old.id).filter((e) => !inCidr(e.ip, n.cidr));
       if (out.length) throw bad(`Nowy CIDR nie obejmuje ${out.length} istniejących wpisów (np. ${out[0].ip})`);
@@ -711,6 +712,8 @@ export function createApi(db, opts = {}) {
 
   // ---------- address planning: pools and VLANs per tenant ----------
   function poolInput(b, tenantId, selfId = null) {
+    const site_id = Number(b.site_id);
+    if (!b.site_id || !one('SELECT id FROM sites WHERE id=? AND tenant_id=?', site_id, tenantId)) throw bad('Wybierz lokalizację puli');
     const cidr = normalizeCidr(b.cidr);
     if (!cidr) throw bad('Nieprawidłowy CIDR puli (np. 10.0.0.0/8)');
     const c = parseCidr(cidr);
@@ -718,7 +721,7 @@ export function createApi(db, opts = {}) {
       const oc = parseCidr(o.cidr);
       if (c.first <= oc.last && oc.first <= c.last) throw new HttpError(409, `Pula nakłada się z pulą ${o.cidr}${o.name ? ` („${o.name}”)` : ''}`);
     }
-    return { cidr, name: str(b.name, 80), description: str(b.description) };
+    return { cidr, site_id, name: str(b.name, 80), description: str(b.description) };
   }
   const tenantNets = (tenantId) => all(`SELECT n.*, s.name AS site_name FROM networks n JOIN sites s ON s.id=n.site_id WHERE s.tenant_id=? ORDER BY n.id`, tenantId)
     .map((n) => ({ ...n, c: parseCidr(n.cidr) }));
@@ -732,7 +735,7 @@ export function createApi(db, opts = {}) {
       return { id: n.id, name: n.name, cidr: n.cidr, vlan: n.vlan, site_id: n.site_id, site: n.site_name, used, total: hi - lo + 1, c: n.c };
     });
     const pub = ({ c, ...n }) => n;
-    const pools = all('SELECT * FROM pools WHERE tenant_id=? ORDER BY id', tenant.id).map((p) => ({ ...p, c: parseCidr(p.cidr) }));
+    const pools = all('SELECT p.*, s.name AS site FROM pools p LEFT JOIN sites s ON s.id=p.site_id WHERE p.tenant_id=? ORDER BY p.id', tenant.id).map((p) => ({ ...p, c: parseCidr(p.cidr) }));
     const inside = (n, p) => n.c.first >= p.c.first && n.c.last <= p.c.last;
     const out = pools.map((p) => {
       const mine = nets.filter((n) => n.c.first <= p.c.last && p.c.first <= n.c.last);
@@ -740,7 +743,7 @@ export function createApi(db, opts = {}) {
       const allocated = taken.reduce((s, r) => s + r.last - r.first + 1, 0);
       const free = freeBlocks(p.c, mine.map((n) => n.c));
       return {
-        id: p.id, name: p.name, cidr: p.cidr, description: p.description, size: p.c.size, allocated, free: p.c.size - allocated,
+        id: p.id, name: p.name, cidr: p.cidr, site_id: p.site_id, site: p.site, description: p.description, size: p.c.size, allocated, free: p.c.size - allocated,
         allocations: mine.filter((n) => inside(n, p)).sort((a, b) => a.c.first - b.c.first).map(pub),
         free_blocks: free.slice(0, 64).map(({ cidr, size }) => ({ cidr, size })), free_block_count: free.length,
         largest_free: free.length ? Math.max(...free.map((f) => f.size)) : 0,
@@ -757,15 +760,13 @@ export function createApi(db, opts = {}) {
         conflicts.push({ kind: 'overlap', text: `Sieci ${a.cidr} („${a.name}”, ${a.site}) i ${b.cidr} („${b.name}”, ${b.site}) nakładają się` });
       }
     }
-    const vlans = all('SELECT v.*, s.name AS site FROM vlans v LEFT JOIN sites s ON s.id=v.site_id WHERE v.tenant_id=? ORDER BY v.vid, v.site_id', tenant.id);
-    const uses = (v, n) => n.vlan === v.vid && (v.site_id == null || v.site_id === n.site_id);
-    const unregistered = [...new Set(nets.filter((n) => n.vlan && !vlans.some((v) => uses(v, n))).map((n) => n.vlan))].sort((a, b) => a - b)
-      .map((vid) => ({ vid, networks: nets.filter((n) => n.vlan === vid).map(pub) }));
+    for (const p of pools) for (const n of nets) {
+      if (inside(n, p) && p.site_id != null && n.site_id !== p.site_id) conflicts.push({ kind: 'site', text: `Sieć ${n.cidr} („${n.name}”) leży w puli ${p.cidr} przypisanej do lokalizacji ${p.site}, a należy do ${n.site}` });
+    }
     return {
       tenant: { id: tenant.id, name: tenant.name }, role: auth.effectiveTenant(auth.rolesOf(user.id), tenant.id),
       sites: all('SELECT id, name FROM sites WHERE tenant_id=? ORDER BY name COLLATE NOCASE', tenant.id),
       pools: out, unpooled: nets.filter((n) => !inAnyPool(n)).map(pub), conflicts,
-      vlans: vlans.map((v) => ({ ...v, networks: nets.filter((n) => uses(v, n)).map(pub) })), unregistered,
     };
   });
 
@@ -773,7 +774,7 @@ export function createApi(db, opts = {}) {
     must(one('SELECT id FROM tenants WHERE id=?', params.id), 'Tenant');
     needTenant(user, Number(params.id), 'admin');
     const p = poolInput(body, Number(params.id));
-    const r = run('INSERT INTO pools (tenant_id, name, cidr, description) VALUES (?,?,?,?)', params.id, p.name, p.cidr, p.description);
+    const r = run('INSERT INTO pools (tenant_id, site_id, name, cidr, description) VALUES (?,?,?,?,?)', params.id, p.site_id, p.name, p.cidr, p.description);
     log('create', 'pool', `${p.cidr}${p.name ? ` (${p.name})` : ''}`);
     return { id: Number(r.lastInsertRowid), tenant_id: Number(params.id), ...p };
   }));
@@ -781,7 +782,7 @@ export function createApi(db, opts = {}) {
     const old = must(one('SELECT * FROM pools WHERE id=?', params.id), 'Pula');
     needTenant(user, old.tenant_id, 'admin');
     const p = poolInput(body, old.tenant_id, old.id);
-    run('UPDATE pools SET name=?, cidr=?, description=? WHERE id=?', p.name, p.cidr, p.description, old.id);
+    run('UPDATE pools SET site_id=?, name=?, cidr=?, description=? WHERE id=?', p.site_id, p.name, p.cidr, p.description, old.id);
     log('update', 'pool', `${p.cidr}${p.name ? ` (${p.name})` : ''}`);
     return { id: old.id, tenant_id: old.tenant_id, ...p };
   }));
@@ -802,10 +803,10 @@ export function createApi(db, opts = {}) {
     if (!cidr) throw new HttpError(404, `W puli ${p.cidr} nie ma wolnego bloku /${prefix}`);
     return { cidr };
   });
-  // Carves a subnet out of a pool and creates it as a network of the chosen location.
+  // Carves a subnet out of a pool and creates it as a network of the pool's location.
   route('POST', '/api/pools/:id/allocate', ({ params, body, user }) => unique(() => {
     const p = must(one('SELECT * FROM pools WHERE id=?', params.id), 'Pula');
-    const site = must(one('SELECT * FROM sites WHERE id=? AND tenant_id=?', body.site_id, p.tenant_id), 'Lokalizacja');
+    const site = must(one('SELECT * FROM sites WHERE id=?', p.site_id), 'Lokalizacja puli');
     need(user, site.id, 'admin');
     const pc = parseCidr(p.cidr);
     let cidr = body.cidr ? normalizeCidr(body.cidr) : null;
@@ -820,51 +821,12 @@ export function createApi(db, opts = {}) {
     const clash = tenantNets(p.tenant_id).find((o) => c.first <= o.c.last && o.c.first <= c.last);
     if (clash) throw new HttpError(409, `Blok ${cidr} nakłada się z siecią „${clash.name}” (${clash.cidr}, ${clash.site_name})`);
     const n = netInput({ gateway: 'first', ...body, cidr });
+    vlanFree(site.id, n.vlan);
     const r = run(`INSERT INTO networks (site_id, name, cidr, vlan, gateway, dhcp_start, dhcp_end, dns, description, auto_scan)
       VALUES (?,?,?,?,?,?,?,?,?,?)`, site.id, n.name, n.cidr, n.vlan, n.gateway, n.dhcp_start, n.dhcp_end, n.dns, n.description, n.auto_scan);
     log('create', 'network', `${n.name} (${n.cidr}) z puli ${p.cidr}`);
     return { id: Number(r.lastInsertRowid), site_id: site.id, ...n };
   }));
-
-  function vlanInput(b, tenantId, selfId = null) {
-    const vid = Number(b.vid);
-    if (!Number.isInteger(vid) || vid < 1 || vid > 4094) throw bad('VLAN musi być w zakresie 1–4094');
-    const name = str(b.name, 80);
-    if (!name) throw bad('Nazwa VLAN-u jest wymagana');
-    let site_id = null;
-    if (b.site_id !== '' && b.site_id != null) {
-      site_id = Number(b.site_id);
-      must(one('SELECT id FROM sites WHERE id=? AND tenant_id=?', site_id, tenantId), 'Lokalizacja');
-    }
-    // A VLAN id is either global for the tenant or defined per location, never both.
-    const clash = all('SELECT * FROM vlans WHERE tenant_id=? AND vid=? AND id!=?', tenantId, vid, selfId ?? 0)
-      .find((o) => o.site_id == null || site_id == null || o.site_id === site_id);
-    if (clash) throw new HttpError(409, `VLAN ${vid} jest już zdefiniowany („${clash.name}”)${clash.site_id == null ? ' dla całego tenanta' : ' dla tej lokalizacji'}`);
-    return { vid, name, site_id, description: str(b.description) };
-  }
-  route('POST', '/api/tenants/:id/vlans', ({ params, body, user }) => unique(() => {
-    must(one('SELECT id FROM tenants WHERE id=?', params.id), 'Tenant');
-    needTenant(user, Number(params.id), 'admin');
-    const v = vlanInput(body, Number(params.id));
-    const r = run('INSERT INTO vlans (tenant_id, site_id, vid, name, description) VALUES (?,?,?,?,?)', params.id, v.site_id, v.vid, v.name, v.description);
-    log('create', 'vlan', `${v.vid} ${v.name}`);
-    return { id: Number(r.lastInsertRowid), tenant_id: Number(params.id), ...v };
-  }));
-  route('PUT', '/api/vlans/:id', ({ params, body, user }) => unique(() => {
-    const old = must(one('SELECT * FROM vlans WHERE id=?', params.id), 'VLAN');
-    needTenant(user, old.tenant_id, 'admin');
-    const v = vlanInput(body, old.tenant_id, old.id);
-    run('UPDATE vlans SET vid=?, name=?, site_id=?, description=? WHERE id=?', v.vid, v.name, v.site_id, v.description, old.id);
-    log('update', 'vlan', `${v.vid} ${v.name}`);
-    return { id: old.id, tenant_id: old.tenant_id, ...v };
-  }));
-  route('DELETE', '/api/vlans/:id', ({ params, user }) => {
-    const v = must(one('SELECT * FROM vlans WHERE id=?', params.id), 'VLAN');
-    needTenant(user, v.tenant_id, 'admin');
-    run('DELETE FROM vlans WHERE id=?', v.id);
-    log('delete', 'vlan', `${v.vid} ${v.name}`);
-    return { ok: true };
-  });
 
   // ---------- consistency checks ----------
   route('GET', '/api/networks/:id/issues', ({ params, user }) => {

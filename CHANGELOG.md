@@ -4,6 +4,11 @@ All notable changes to simpleIPAM are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
+### Changed
+- A network is now a VLAN + subnet: the VLAN is required (1–4094), unique within a location, and may repeat across locations of a tenant. The separate VLAN registry (tab, routes `/api/tenants/:id/vlans`, `/api/vlans/:id`) is gone.
+- Address pools always belong to a location (`site_id`); allocating from a pool creates the network in that location. Existing pools are assigned automatically to the location holding most of their networks (else the tenant's first location). The legacy `vlans` table is left untouched in existing databases.
+- Networks without a VLAN (older data, UniFi/Azure imports) are flagged in the consistency check; editing them requires a VLAN.
+
 
 ## [0.17.0] - 2026-11-22
 
