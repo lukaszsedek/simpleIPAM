@@ -4,6 +4,8 @@ All notable changes to simpleIPAM are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
+
+## [0.19.0] - 2026-11-22
 ### Changed
 - Planning is reworked: pools belong to the tenant (many per tenant, e.g. 10.0.0.0/8 and 192.168.0.0/16) and any subnet inside them can be handed to a location. The pool-per-location binding of 0.18.0 is gone.
 - A network's VLAN is optional again: no VLAN means the default network, which counts as VLAN 1. A VLAN id (including the implicit 1) is unique within a location; tenants and other locations may reuse it.
