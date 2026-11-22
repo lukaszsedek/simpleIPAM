@@ -245,6 +245,55 @@ function Integrations({ notify, tenants }) {
   );
 }
 
+function Notifications({ notify }) {
+  const [c, setC] = useState(null);
+  const [url, setUrl] = useState('');
+  const [busy, setBusy] = useState(false);
+  const load = () => api.notifyConfig().then(setC).catch((e) => notify(e.message, 'error'));
+  useEffect(() => { load(); }, []);
+  if (!c) return <section class="card span-2"><h3>{t('Powiadomienia')}</h3><p class="muted">{t('Ładowanie…')}</p></section>;
+  const save = async (patch = {}) => {
+    setBusy(true);
+    try { setC(await api.saveNotify({ enabled: c.enabled, kind: c.kind, events: c.events, url, ...patch })); setUrl(''); notify('Zapisano'); }
+    catch (e) { notify(e.message, 'error'); }
+    setBusy(false);
+  };
+  const test = async () => {
+    setBusy(true);
+    try { await api.testNotify(); notify('Wysłano wiadomość testową'); await load(); } catch (e) { notify(e.message, 'error'); }
+    setBusy(false);
+  };
+  const ev = (k, label) => <label class="toggle"><input type="checkbox" checked={c.events[k]} onChange={(e) => setC({ ...c, events: { ...c.events, [k]: e.target.checked } })} /> {t(label)}</label>;
+  return (
+    <section class="card span-2">
+      <h3>{t('Powiadomienia')}</h3>
+      <p class="muted small-text">{t('Wiadomość trafia na ntfy albo na webhook (Slack, Discord, Home Assistant…), gdy skan lub UniFi znajdzie coś nowego. Wiele znalezisk z jednego skanu to jedna wiadomość.')}</p>
+      <div class="form-grid">
+        <label class="toggle span"><input type="checkbox" checked={c.enabled} onChange={(e) => setC({ ...c, enabled: e.target.checked })} /> {t('Wysyłaj powiadomienia')}</label>
+        <Field label="Rodzaj">
+          <select value={c.kind} onChange={(e) => setC({ ...c, kind: e.target.value })}>
+            <option value="ntfy">ntfy</option><option value="webhook">{t('Webhook (JSON)')}</option>
+          </select>
+        </Field>
+        <Field label="Adres URL" hint={c.url_set ? t('zapisany: {host} — wpisz nowy, by go zmienić', { host: c.url_host }) : c.kind === 'ntfy' ? 'np. https://ntfy.sh/twoj-temat' : 'np. https://hooks.slack.com/…'}>
+          <input type="url" autocomplete="off" value={url} placeholder={c.url_set ? t('(zapisany)') : 'https://'} onInput={(e) => setUrl(e.target.value)} />
+        </Field>
+        <div class="event-list span"><span>{t('Powiadamiaj o')}</span>
+          {ev('new_host', 'Nowe urządzenia w sieci')}
+          {ev('moved', 'Urządzenie zmieniło adres')}
+          {ev('mac_change', 'Zmiana adresu MAC')}
+        </div>
+        <footer>
+          <button type="button" class="btn ghost" disabled={busy || !c.url_set} onClick={test}>{t('Wyślij test')}</button>
+          <button type="button" class="btn primary" disabled={busy} onClick={() => save()}>{t('Zapisz')}</button>
+        </footer>
+      </div>
+      {c.last && <p class={`small-text ${c.last.ok ? 'muted' : 'error-text'}`} role={c.last.ok ? undefined : 'alert'}>
+        {c.last.ok ? t('Ostatnia wiadomość: {n} zdarzeń, {when}', { n: c.last.count, when: new Date(c.last.ts).toLocaleString(locale()) }) : t('Ostatnia wysyłka nie powiodła się: {err}', { err: c.last.error })}</p>}
+    </section>
+  );
+}
+
 function Settings({ notify }) {
   const [reg, setReg] = useState(true);
   const [sys, setSys] = useState(null);
@@ -274,6 +323,7 @@ function Settings({ notify }) {
           </dl>
         ) : <p class="muted">{t('Ładowanie…')}</p>}
       </section>
+      <Notifications notify={notify} />
     </div>
   );
 }

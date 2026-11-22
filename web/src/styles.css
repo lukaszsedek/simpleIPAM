@@ -516,3 +516,6 @@ tr:focus-within .cell-wrap:has(.cell-input.alias:placeholder-shown) { display: b
   .btn.small { padding: 8px 12px; }
   .segmented button, .tabs a { padding-top: 9px; padding-bottom: 9px; }
 }
+
+.event-list { display: grid; gap: 8px; }
+.event-list > span { font-size: 12px; font-weight: 600; color: var(--muted); }

@@ -362,6 +362,66 @@ test('a new host with the MAC of a known entry is flagged; changes lists appeare
   assert.deepEqual((await admin('GET', `/api/networks/${net.id}/changes`, {}, { days: 999 })).days, 90);
 });
 
+test('notifications: new hosts, moved devices and MAC changes are batched into one message; the URL stays secret', async () => {
+  const sent = [];
+  const fakeFetch = async (url, init) => { sent.push({ url: String(url), headers: init.headers, body: init.body }); return { ok: true, status: 200 }; };
+  const macs = new Map([['10.0.0.2', 'aa:aa:aa:aa:aa:01'], ['10.0.0.9', 'aa:aa:aa:aa:aa:02'], ['10.0.0.7', 'aa:aa:aa:aa:aa:03']]);
+  const alive = new Set(['10.0.0.2', '10.0.0.9']);
+  const api = createApi(openDb(':memory:'), { ping: async (ip) => alive.has(ip), neighbors: async () => macs, fetch: fakeFetch, notifyDelayMs: 60000 });
+  const admin = client(api);
+  await admin.register('admin');
+  const site = await mkSite(admin, 'dom3');
+  const net = await admin('POST', `/api/sites/${site.id}/networks`, { name: 'lan', cidr: '10.0.0.0/28' });
+  await admin('POST', `/api/networks/${net.id}/entries`, { ip: '10.0.0.2', fqdn: 'nas.lan', mac: 'aa:aa:aa:aa:aa:01' });
+
+  assert.equal((await admin('GET', '/api/admin/notify')).enabled, false);
+  await admin('POST', `/api/networks/${net.id}/scan`);          // not configured yet: nothing queued
+  assert.equal(await api.flushNotify(), null);
+  await assert.rejects(admin('PUT', '/api/admin/notify', { enabled: true }), /adres/);
+  await assert.rejects(admin('PUT', '/api/admin/notify', { url: 'ftp://x' }), /http/);
+  await assert.rejects(admin('POST', '/api/admin/notify/test'), /zapisz adres/i);
+  const saved = await admin('PUT', '/api/admin/notify', { enabled: true, kind: 'ntfy', url: 'https://ntfy.example/secret-topic' });
+  assert.equal(saved.url, undefined);                           // never echoed
+  assert.deepEqual([saved.url_set, saved.url_host], [true, 'ntfy.example']);
+
+  assert.deepEqual(await admin('POST', '/api/admin/notify/test'), { ok: true });
+  assert.equal(sent.length, 1);
+  assert.match(sent[0].headers.Title, /^=\?UTF-8\?B\?/);           // Polish title is RFC 2047 encoded for the header
+  sent.length = 0;
+
+  alive.add('10.0.0.7');
+  macs.set('10.0.0.2', 'aa:aa:aa:aa:aa:99');                      // the NAS now shows another MAC
+  alive.add('10.0.0.11'); macs.set('10.0.0.11', 'AA:AA:AA:AA:AA:01');   // and a "new" host carries the NAS's old MAC
+  await admin('POST', `/api/networks/${net.id}/scan`);
+  const res = await api.flushNotify();
+  assert.equal(res.ok, true);
+  assert.equal(sent.length, 1, 'one batched message');
+  const text = sent[0].body;
+  assert.match(text, /Nowe urządzenia w sieci \(1\)[\s\S]*10\.0\.0\.7/);
+  assert.match(text, /zmieniło adres[\s\S]*10\.0\.0\.11/i);
+  assert.match(text, /Zmiana adresu MAC[\s\S]*10\.0\.0\.2/);
+
+  // same findings again are not announced twice
+  sent.length = 0;
+  await admin('POST', `/api/networks/${net.id}/scan`);
+  assert.equal(await api.flushNotify(), null);
+
+  // event switches and the webhook format
+  await admin('PUT', '/api/admin/notify', { kind: 'webhook', url: 'https://hooks.example/x', events: { new_host: false } });
+  alive.add('10.0.0.8'); macs.set('10.0.0.8', 'aa:aa:aa:aa:aa:08');
+  await admin('POST', `/api/networks/${net.id}/scan`);
+  assert.equal(await api.flushNotify(), null, 'new_host switched off');
+  await admin('POST', '/api/admin/notify/test');
+  const hook = JSON.parse(sent.at(-1).body);
+  assert.deepEqual([hook.app, typeof hook.text, typeof hook.content], ['simpleIPAM', 'string', 'string']);
+
+  // a failing endpoint is reported, not thrown
+  const failing = createApi(openDb(':memory:'), { fetch: async () => ({ ok: false, status: 500 }) });
+  const a2 = client(failing); await a2.register('admin');
+  await a2('PUT', '/api/admin/notify', { enabled: true, url: 'https://x.example/t' });
+  await assert.rejects(a2('POST', '/api/admin/notify/test'), /500/);
+});
+
 test('first run: setup screen flag, first account is Admin, later sign-ups start with no access until an admin assigns a role', async () => {
   const env = await boot0();
   const { newClient } = env;

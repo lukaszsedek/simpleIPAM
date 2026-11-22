@@ -3,6 +3,7 @@ import { execFile } from 'node:child_process';
 
 import { HttpError } from './errors.js';
 import { createAuth, RANK, ROLES } from './auth.js';
+import * as notify from './notify.js';
 import { snapshotBuffer, backupName, listLocal, isBackupName, loadConfig, saveConfig, publicConfig, runBackup, runDailyIfDue, lastBackup, testRemote, setGdriveAuth } from './backup.js';
 import * as gd from './gdrive.js';
 import * as gl from './google-login.js';
@@ -215,8 +216,43 @@ export function createApi(db, opts = {}) {
   function observeMac(e, mac, who) {
     if (!mac || mac === e.seen_mac) return;
     run('UPDATE entries SET seen_mac=? WHERE id=?', mac, e.id);
-    if (e.mac && mac !== e.mac && mac !== e.mac_ack) hist(e.network_id, e.id, e.ip, 'mac_seen', { mac: [e.mac, mac] }, who);
+    if (e.mac && mac !== e.mac && mac !== e.mac_ack) {
+      hist(e.network_id, e.id, e.ip, 'mac_seen', { mac: [e.mac, mac] }, who);
+      queueNotify('mac_change', one('SELECT name FROM networks WHERE id=?', e.network_id)?.name ?? '', `${e.ip} (${e.alias || e.fqdn || 'bez nazwy'}): widziany MAC ${mac}, wpis ma ${e.mac}`);
+    }
   }
+
+  // ---------- notifications ----------
+  const notifyCfg = () => {
+    let c = {};
+    try { c = JSON.parse(one("SELECT value FROM settings WHERE key='notify'")?.value ?? '{}'); } catch { /* unset */ }
+    return { enabled: false, kind: 'ntfy', url: '', ...c, events: { new_host: true, moved: true, mac_change: true, ...(c.events ?? {}) } };
+  };
+  let notifyQueue = [];
+  let notifyTimer = null;
+  // Findings are collected for a few seconds and sent as one message, so a scan that finds ten devices makes one notification.
+  const queueNotify = (event, network, text) => {
+    const c = notifyCfg();
+    if (!c.enabled || !c.url || !c.events[event]) return;
+    notifyQueue.push({ event, network, text });
+    if (!notifyTimer) { notifyTimer = setTimeout(() => { notifyTimer = null; flushNotify(); }, opts.notifyDelayMs ?? 5000); notifyTimer.unref?.(); }
+  };
+  async function flushNotify() {
+    const items = notifyQueue; notifyQueue = [];
+    if (!items.length) return null;
+    const res = { ts: new Date().toISOString(), count: items.length, ok: true, error: '' };
+    try { await notify.send(notifyCfg(), notify.compose(items), { fetch: opts.fetch }); }
+    catch (e) { res.ok = false; res.error = String(e.cause?.code ?? e.message).slice(0, 200); }
+    saveSetting('notify_last', res);
+    return res;
+  }
+  // A host seen for the first time: a "moved" notice when its MAC belongs to a known entry at another address, otherwise a plain "new host".
+  const noteNewHost = (net, ip, mac, name = '') => {
+    if (one('SELECT 1 AS x FROM discovered WHERE network_id=? AND ip=?', net.id, ip)) return;
+    const known = mac && one('SELECT ip, fqdn, alias FROM entries WHERE network_id=? AND lower(mac)=lower(?) AND ip!=?', net.id, mac, ip);
+    if (known) queueNotify('moved', net.name, `${ip} (${mac}) to prawdopodobnie ${known.alias || known.fqdn || 'znane urządzenie'} z adresu ${known.ip}`);
+    else queueNotify('new_host', net.name, `${ip}${name ? ` ${name}` : ''}${mac ? ` (${mac})` : ''}`);
+  };
 
   function nextFree(net, from = null) {
     const [lo, hi] = usableRange(net.cidr);
@@ -268,6 +304,7 @@ export function createApi(db, opts = {}) {
         run("UPDATE entries SET last_seen=datetime('now') WHERE id=?", e.id);
         observeMac(e, mac, 'skan');
       } else {
+        noteNewHost(net, ip, mac);
         run(`INSERT INTO discovered (network_id, ip, mac) VALUES (?,?,?)
           ON CONFLICT(network_id, ip) DO UPDATE SET last_seen=datetime('now'), mac=CASE WHEN excluded.mac!='' THEN excluded.mac ELSE mac END`, net.id, ip, mac);
       }
@@ -888,6 +925,36 @@ export function createApi(db, opts = {}) {
     return { user: me, setup_required: count('users') === 0, registration_open: registrationOpen(), google_login: googleLogin().ready, version: opts.version ?? 'dev' };
   }, { public: true });
   route('GET', '/api/health', () => ({ ok: true }), { public: true });
+  // ---------- notifications ----------
+  const notifyPublic = () => {
+    const { url, ...c } = notifyCfg();
+    let last = null;
+    try { last = JSON.parse(one("SELECT value FROM settings WHERE key='notify_last'")?.value ?? 'null'); } catch { /* none */ }
+    return { ...c, url_set: !!url, url_host: notify.parseUrl(url)?.host ?? '', last };
+  };
+  route('GET', '/api/admin/notify', ({ user }) => (needGlobalAdmin(user), notifyPublic()));
+  route('PUT', '/api/admin/notify', ({ body, user, ctx }) => {
+    needGlobalAdmin(user); sessionOnly(ctx);
+    const c = notifyCfg();
+    if (body.kind !== undefined) { if (!['ntfy', 'webhook'].includes(body.kind)) throw bad('Nieznany rodzaj powiadomień (ntfy, webhook)'); c.kind = body.kind; }
+    const url = str(body.url, 500);
+    if (url) { if (!notify.parseUrl(url)) throw bad('Adres musi zaczynać się od http:// lub https://'); c.url = url; }
+    for (const k of Object.keys(notify.EVENTS)) if (body.events && k in body.events) c.events[k] = !!body.events[k];
+    if (body.enabled !== undefined) c.enabled = !!body.enabled;
+    if (c.enabled && !c.url) throw bad('Podaj adres, na który mają trafiać powiadomienia');
+    saveSetting('notify', c);
+    log('update', 'settings', 'powiadomienia');
+    return notifyPublic();
+  });
+  route('POST', '/api/admin/notify/test', async ({ user, ctx }) => {
+    needGlobalAdmin(user); sessionOnly(ctx);
+    const c = notifyCfg();
+    if (!c.url) throw bad('Najpierw zapisz adres powiadomień');
+    try { await notify.send(c, { title: 'simpleIPAM: test powiadomień', text: 'Jeśli to widzisz, powiadomienia działają.' }, { fetch: opts.fetch }); }
+    catch (e) { throw bad(`Nie udało się wysłać: ${String(e.cause?.code ?? e.message)}`); }
+    return { ok: true };
+  });
+
   // ---------- sign in with Google ----------
   // Separate OAuth client from the Drive one: login needs a "Web application" client with a redirect URI.
   const googleLogin = () => {
@@ -1543,6 +1610,7 @@ export function createApi(db, opts = {}) {
           }
         } else if (!cl.device && inPool(net, cl.ip) && !c.import_dhcp) {
           sum.entries.pooled++;
+          if (!dry && net.id) noteNewHost({ id: net.id, name: ipamSite?.name ?? '' }, cl.ip, mac, cl.name.slice(0, 100));
           if (!dry && net.id) run(`INSERT INTO discovered (network_id, ip, mac, name) VALUES (?,?,?,?)
             ON CONFLICT(network_id, ip) DO UPDATE SET last_seen=datetime('now'), name=excluded.name, mac=CASE WHEN excluded.mac!='' THEN excluded.mac ELSE mac END`, net.id, cl.ip, mac, cl.name.slice(0, 100));
         } else {
@@ -1770,5 +1838,5 @@ export function createApi(db, opts = {}) {
   route('GET', '/api/openapi.json', () => buildOpenApi(routes, { version: opts.version }), { public: true });
   route('GET', '/api/docs', () => ({ raw: DOCS_HTML, contentType: 'text/html; charset=utf-8', inline: true }), { public: true });
 
-  return Object.assign(handle, { routes, runUnifiAuto, runAzureAuto, runScheduledScans, runDailyBackup: () => runDailyIfDue(db, bdeps()) });
+  return Object.assign(handle, { routes, flushNotify, runUnifiAuto, runAzureAuto, runScheduledScans, runDailyBackup: () => runDailyIfDue(db, bdeps()) });
 }
