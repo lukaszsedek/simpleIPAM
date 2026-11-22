@@ -5,6 +5,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+## [0.16.0] - 2026-11-22
+
 ### Changed
 - Phones: the entries table becomes one card per address (IP, status, name, type, MAC and actions visible without sideways scrolling) and navigation moves to a floating bottom dock (Home / Review / Search / Menu) with a dimmed backdrop behind the side drawer.
 - Responsive polish: fluid headline and page padding, usage stats reflow to 3 / 2 columns, modals and cards react to their own width (container queries), a sticky table header on wide screens, tabular numerals for addresses.
