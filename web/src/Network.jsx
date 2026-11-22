@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'preact/hooks';
 import { api } from './api.js';
 import { Icon, Modal, Field, TYPE_LABELS, STATUS_LABELS, RANK, ask } from './ui.jsx';
+import { Labels } from './Labels.jsx';
 import { t, getLang } from './i18n.js';
 
 const ipNum = (ip) => ip.split('.').reduce((a, o) => a * 256 + Number(o), 0);
@@ -151,6 +152,7 @@ const placeMenu = (e) => {
   if (list.getBoundingClientRect().right > innerWidth - 8) list.classList.add('flip');
 };
 let lit = [];
+let flashed = '';
 const light = (n) => {
   lit.forEach((x) => x.classList.remove('hot'));
   lit = n == null ? [] : [...document.querySelectorAll(`[data-n="${n}"]`)];
@@ -193,7 +195,7 @@ function DnsModal({ net, onClose }) {
   );
 }
 
-function BulkBar({ count, onApply, onDelete, onClear }) {
+function BulkBar({ count, onApply, onDelete, onClear, onLabels }) {
   const [type, setType] = useState('');
   const [status, setStatus] = useState('');
   const [tags, setTags] = useState('');
@@ -210,6 +212,7 @@ function BulkBar({ count, onApply, onDelete, onClear }) {
       <input placeholder={t('dodaj tagi…')} value={tags} onInput={(e) => setTags(e.target.value)} />
       <button class="btn small primary" disabled={!Object.keys(changes).length} onClick={() => onApply(changes)}>{t('Zastosuj')}</button>
       <span class="spacer" />
+      <button class="btn small ghost" onClick={onLabels}><Icon name="qr" size={14} />{t('Etykiety')}</button>
       <button class="btn small ghost danger" onClick={onDelete}><Icon name="trash" size={14} />{t('Usuń')}</button>
       <button class="btn small ghost" onClick={onClear}>{t('Anuluj')}</button>
     </div>
@@ -281,6 +284,7 @@ export function Network({ id, notify, reload, onEditNet, onDeleteNet }) {
   const [form, setForm] = useState(null);
   const [scan, setScan] = useState(false);
   const [dns, setDns] = useState(false);
+  const [labels, setLabels] = useState(false);
   const [hist, setHist] = useState(null);   // entry, or true for the whole network
   const [issues, setIssues] = useState([]);
   const [found, setFound] = useState([]);
@@ -300,6 +304,17 @@ export function Network({ id, notify, reload, onEditNet, onDeleteNet }) {
   };
   useEffect(() => { setNet(null); setQ(''); load(); }, [id, chgDays]);
   const refresh = () => { load(); reload(); };
+  // A scanned label opens #/n/<id>?ip=<address>: scroll to that entry and flash it once.
+  useEffect(() => {
+    const ip = /[?&]ip=([\d.]+)/.exec(location.hash)?.[1];
+    if (!net || !ip || flashed === `${id}:${ip}`) return;
+    const row = document.querySelector(`tr[data-n="${ipNum(ip)}"]`);
+    if (!row) return;
+    flashed = `${id}:${ip}`;
+    row.scrollIntoView({ block: 'center', behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
+    row.classList.add('flash');
+    setTimeout(() => row.classList.remove('flash'), 3200);
+  }, [net]);
 
   const byNum = useMemo(() => new Map((net?.entries ?? []).map((e) => [ipNum(e.ip), e])), [net]);
   const rows = useMemo(() => {
@@ -490,6 +505,7 @@ export function Network({ id, notify, reload, onEditNet, onDeleteNet }) {
           <button class="btn ghost" onClick={() => setHist(true)}><Icon name="history" />{t('Historia')}</button>
           {canEdit && <button class="btn ghost" onClick={() => setScan(true)}><Icon name="radar" />{t('Skanuj')}</button>}
           <button class="btn ghost" onClick={() => setDns(true)} title={t('Porównuje FQDN wpisów z tym, co odpowiada DNS')}><Icon name="search" />DNS</button>
+          <button class="btn ghost" onClick={() => setLabels(true)} title={t('Drukuj etykiety z kodem QR')}><Icon name="qr" />{t('Etykiety')}</button>
           <details class="menu" onToggle={placeMenu}>
             <summary class="btn ghost"><Icon name="menu" />{t('Kolumny')}</summary>
             <div class="menu-list cols-menu">
@@ -512,7 +528,7 @@ export function Network({ id, notify, reload, onEditNet, onDeleteNet }) {
             <Icon name="plus" />{t('Dodaj')}</button>}
         </div>
 
-        {sel.size > 0 && <BulkBar count={sel.size} onClear={() => setSel(new Set())}
+        {sel.size > 0 && <BulkBar count={sel.size} onClear={() => setSel(new Set())} onLabels={() => setLabels(true)}
           onApply={(changes) => bulk({ action: 'update', changes }, 'Zmieniono')}
           onDelete={async () => {
             if (!await ask(t('Usunąć {n} wpisów?', { n: sel.size }), { title: 'Usuń wpisy' })) return;
@@ -572,6 +588,7 @@ export function Network({ id, notify, reload, onEditNet, onDeleteNet }) {
       </section>
 
       {form && <EntryForm net={net} entry={form} notify={notify} onClose={() => setForm(null)} onSaved={() => { setForm(null); refresh(); }} />}
+      {labels && <Labels net={net} entries={net.entries} selected={sel} onClose={() => setLabels(false)} />}
       {hist && <HistoryModal net={net} entry={hist === true ? null : hist} onClose={() => setHist(null)} />}
       {dns && <DnsModal net={net} onClose={() => setDns(false)} />}
       {scan && <ScanModal net={net} onClose={() => setScan(false)} onAdd={(ip) => { setScan(false); setForm({ ip }); }} />}

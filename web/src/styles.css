@@ -632,3 +632,37 @@ details.menu { position: relative; top: auto; right: auto; min-width: 0; padding
   .scan-list li { flex-wrap: wrap; gap: 4px 12px; }
   .scan-list li .row-btns { margin-left: auto; }
 }
+
+/* ===== QR labels ===== */
+.warn-text { color: var(--warn); margin: 0; }
+@media screen { .label-sheet { zoom: .62; } }
+tr.flash td, tr.flash { animation: flash 3.2s var(--ease); }
+@keyframes flash { 0%, 55% { background: color-mix(in oklch, var(--accent) 28%, transparent); } 100% { background: transparent; } }
+
+.label-opts { margin-bottom: 14px; }
+.label-sheet { --lw: 70mm; --lh: 37mm; display: grid; grid-template-columns: repeat(auto-fill, var(--lw)); justify-content: start; padding: 10px; border-radius: var(--radius);
+  background: #fff; color: #111; max-height: 46vh; overflow: auto; }
+.label { box-sizing: border-box; width: var(--lw); height: var(--lh); padding: 2.5mm; display: flex; gap: 2.5mm; align-items: center; overflow: hidden; break-inside: avoid; page-break-inside: avoid; background: #fff; color: #111; }
+.label-sheet.bordered .label { outline: .2mm dashed #888; outline-offset: -.2mm; }
+.label .qr { flex: none; height: 100%; aspect-ratio: 1; display: block; }
+.label .qr svg { width: 100%; height: 100%; display: block; shape-rendering: crispEdges; }
+.label-text { display: flex; flex-direction: column; min-width: 0; gap: .4mm; line-height: 1.15; font-size: 9pt; }
+.label-text .label-title { font-size: 12pt; font-weight: 600; overflow-wrap: anywhere; }
+.label-text .label-name { font-weight: 500; overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.label-text small { font-size: 7pt; color: #444; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.label-text .mono { font-family: var(--mono); font-size: inherit; }
+.label.net .label-title { font-size: 13pt; }
+.label-actions { align-items: center; margin-top: 14px; }
+.label-actions .muted { flex: 1; min-width: 12ch; text-align: left; }
+
+@media print {
+  html, body { background: #fff !important; }
+  .shell > aside, .dock, .toasts, .skip-link, .menu-btn, .topbar { display: none !important; }
+  .shell { display: block; }
+  .page { display: block; max-width: none; padding: 0; }
+  .page > :not(.overlay) { display: none !important; }
+  .overlay { position: static !important; inset: auto; padding: 0 !important; background: none !important; backdrop-filter: none !important; display: block; animation: none; }
+  .modal { width: 100% !important; container-type: normal !important; max-height: none !important; overflow: visible !important; border: 0 !important; box-shadow: none !important; padding: 0 !important; background: none !important; animation: none; }
+  .modal > header, .label-opts, .label-actions { display: none !important; }
+  .label-sheet { max-height: none; overflow: visible; padding: 0; border-radius: 0; }
+}

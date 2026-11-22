@@ -5,6 +5,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+### Added
+- QR labels (network page → Labels, or from a selection): printable labels per device (IP, name, MAC) and an optional label for the whole network (e.g. for a cabinet), in three sizes (50×25, 70×37, 105×48 mm), for plain paper or sticker sheets. The code is a plain link; scanning it opens the entry. The app address in the code is editable (a phone cannot open `localhost`) and remembered per browser.
+- Deep link `#/n/<id>?ip=<address>` scrolls to the entry and flashes it once.
+
 ## [0.16.0] - 2026-11-22
 
 ### Changed
