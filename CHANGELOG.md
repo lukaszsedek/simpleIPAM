@@ -5,6 +5,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+### Changed
+- UI redesign: teal "patch cable" palette (light and dark), IBM Plex Sans/Mono bundled with the app (no CDN), flatter surfaces with smaller radii, no all-caps table headers, and the usage tiles became a single ruled strip.
+- The address map is now a patch panel: rows of 16 with the row's starting address on the left and the last octet shown in every cell.
+
 ## [0.12.1] - 2026-11-14
 
 ### Changed

@@ -48,9 +48,9 @@ export const Icon = ({ name, size = 18 }) => (
 // Brand mark: the address map (gateway green, used white, reserved amber, free faded). Same artwork as public/logo.svg.
 export const Logo = ({ size = 28 }) => (
   <svg class="logo" width={size} height={size} viewBox="0 0 64 64" role="img" aria-label="simpleIPAM">
-    <defs><linearGradient id="logo-g" x1="6" y1="4" x2="58" y2="60" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#6366f1" /><stop offset="1" stop-color="#9b5cf6" /></linearGradient></defs>
+    <defs><linearGradient id="logo-g" x1="6" y1="4" x2="58" y2="60" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#12a3b0" /><stop offset="1" stop-color="#0a5560" /></linearGradient></defs>
     <rect width="64" height="64" rx="15" fill="url(#logo-g)" />
-    <rect x="9.55" y="9.55" width="8.6" height="8.6" rx="2.4" fill="#34d399"/>
+    <rect x="9.55" y="9.55" width="8.6" height="8.6" rx="2.4" fill="#c4b5fd"/>
     <rect x="21.65" y="9.55" width="8.6" height="8.6" rx="2.4" fill="#fff"/>
     <rect x="33.75" y="9.55" width="8.6" height="8.6" rx="2.4" fill="#fff"/>
     <rect x="45.85" y="9.55" width="8.6" height="8.6" rx="2.4" fill="#fff"/>

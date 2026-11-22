@@ -212,7 +212,17 @@ function IpMap({ net, byNum, onPick }) {
   const de = net.dhcp_end ? ipNum(net.dhcp_end) : -2;
   const cells = [];
   const sys = (n, label) => <span key={`s${n}`} class="ipcell sys" title={`${ipOf(n)} · ${label}`} aria-label={`${ipOf(n)} · ${label}`} />;
-  if (net.network_addr) cells.push(sys(lo - 1, t('adres sieci')));
+  // Patch-panel layout: rows of 16, each led by the row's first address, each cell carrying its last octet.
+  const first = net.network_addr ? lo - 1 : lo;
+  const wide = hi - lo > 255;
+  const rowLabel = (n) => (wide ? `${(n >>> 8) & 255}.${n & 255}` : `.${n & 255}`);
+  const pad = first % 16;
+  const put = (n, node) => {
+    if (n % 16 === 0 || cells.length === 0) cells.push(<span key={`r${n}`} class="rowlab" aria-hidden="true">{rowLabel(n - (n % 16))}</span>);
+    if (cells.length === 1) for (let i = 0; i < pad; i++) cells.push(<span key={`p${i}`} class="ipcell pad" aria-hidden="true" />);
+    cells.push(node);
+  };
+  if (net.network_addr) put(lo - 1, sys(lo - 1, t('adres sieci')));
   for (let n = lo; n <= hi; n++) {
     const e = byNum.get(n);
     const pool = n >= ds && n <= de;
@@ -221,9 +231,9 @@ function IpMap({ net, byNum, onPick }) {
     else if (n === gw) cls = 'gw';
     else if (pool) cls = 'dhcp';
     const title = `${ipOf(n)}${e?.fqdn ? ` · ${e.fqdn}` : ''}${n === gw ? ` · ${t('brama')}` : ''}${!e && n >= ds && n <= de ? ' · DHCP' : ''}`;
-    cells.push(<button key={n} class={`ipcell ${cls}`} title={title} aria-label={title} onClick={() => onPick(n, e)} />);
+    put(n, <button key={n} class={`ipcell ${cls}`} title={title} aria-label={title} onClick={() => onPick(n, e)}><span aria-hidden="true">{n & 255}</span></button>);
   }
-  if (net.broadcast_addr) cells.push(sys(hi + 1, t('adres rozgłoszeniowy (broadcast)')));
+  if (net.broadcast_addr) put(hi + 1, sys(hi + 1, t('adres rozgłoszeniowy (broadcast)')));
   return (
     <>
       <div class="ipmap">{cells}</div>
@@ -371,15 +381,15 @@ export function Network({ id, notify, reload, onEditNet, onDeleteNet }) {
       </header>
 
       <section class="stats">
-        <div class="card stat"><span>{t('Wykorzystanie')}</span><b>{pct}%</b>
+        <div class="stat"><span>{t('Wykorzystanie')}</span><b>{pct}%</b>
           <div class="bar"><i style={{ width: `${pct}%` }} /></div></div>
-        <div class="card stat"><span>{t('Statyczne')}</span><b>{st.static}</b></div>
+        <div class="stat"><span>{t('Statyczne')}</span><b>{st.static}</b></div>
         {st.dhcp > 0 && <>
-          <div class="card stat"><span>{t('Rezerwacje DHCP')}</span><b>{st.dhcp_reserved}</b></div>
-          <div class="card stat"><span>{t('Dynamiczne (DHCP)')}</span><b>{st.dynamic}</b></div>
-          <div class="card stat"><span>{t('Pula DHCP')}</span><b>{st.dhcp}</b></div>
+          <div class="stat"><span>{t('Rezerwacje DHCP')}</span><b>{st.dhcp_reserved}</b></div>
+          <div class="stat"><span>{t('Dynamiczne (DHCP)')}</span><b>{st.dynamic}</b></div>
+          <div class="stat"><span>{t('Pula DHCP')}</span><b>{st.dhcp}</b></div>
         </>}
-        <div class="card stat"><span>{t('Dostępne łącznie')}</span><b>{st.total}</b></div>
+        <div class="stat"><span>{t('Dostępne łącznie')}</span><b>{st.total}</b></div>
       </section>
 
       {issues.length > 0 && (
