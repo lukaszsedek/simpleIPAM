@@ -12,6 +12,7 @@ import { buildOpenApi, DOCS_HTML } from './openapi.js';
 import { readNeighbors } from './neighbors.js';
 import { buildXlsx } from './xlsx.js';
 import { readXlsx } from './xlsx-read.js';
+import * as v6 from './ip6.js';
 import { lookup } from 'node:dns/promises';
 import * as unifi from './unifi.js';
 import * as azure from './azure.js';
@@ -72,9 +73,11 @@ export function createApi(db, opts = {}) {
     const cidr = normalizeCidr(b.cidr);
     if (!cidr) throw bad('Nieprawidłowy CIDR (np. 192.168.1.0/24, min. /8)');
     if (parseCidr(cidr).prefix < 16) throw bad('Maksymalny rozmiar sieci to /16');
-    const vlan = Number(b.vlan);
-    if (b.vlan === '' || b.vlan == null) throw bad('VLAN jest wymagany (1–4094)');
-    if (!Number.isInteger(vlan) || vlan < 1 || vlan > 4094) throw bad('VLAN musi być w zakresie 1–4094');
+    let vlan = null;                                   // empty = the default network, which is VLAN 1
+    if (b.vlan !== '' && b.vlan != null) {
+      vlan = Number(b.vlan);
+      if (!Number.isInteger(vlan) || vlan < 1 || vlan > 4094) throw bad('VLAN musi być w zakresie 1–4094');
+    }
     const ipField = (key, label) => {
       const v = str(b[key], 15);
       if (v && !inCidr(v, cidr)) throw bad(`${label} musi należeć do sieci ${cidr}`);
@@ -141,11 +144,8 @@ export function createApi(db, opts = {}) {
     if (net.gateway && net.dhcp_start && ipToInt(net.gateway) >= ipToInt(net.dhcp_start) && ipToInt(net.gateway) <= ipToInt(net.dhcp_end)) {
       issues.push({ level: 'warn', text: `Brama ${net.gateway} leży w puli DHCP — serwer DHCP może oddać ją innemu urządzeniu` });
     }
-    if (!net.vlan) issues.push({ level: 'warn', text: 'Sieć nie ma przypisanego VLAN-u' });
-    else {
-      for (const o of all('SELECT name, cidr FROM networks WHERE site_id=? AND id!=? AND vlan=?', net.site_id, net.id, net.vlan)) {
-        issues.push({ level: 'warn', text: `VLAN ${net.vlan} jest przypisany także do sieci „${o.name}” (${o.cidr}) w tej samej lokalizacji` });
-      }
+    for (const o of all('SELECT name, cidr FROM networks WHERE site_id=? AND id!=? AND COALESCE(vlan,1)=?', net.site_id, net.id, net.vlan ?? 1)) {
+      issues.push({ level: 'warn', text: `VLAN ${net.vlan ?? 1} jest przypisany także do sieci „${o.name}” (${o.cidr}) w tej samej lokalizacji` });
     }
     const me = parseCidr(net.cidr);
     for (const o of all('SELECT * FROM networks WHERE site_id=? AND id!=?', net.site_id, net.id)) {
@@ -355,15 +355,16 @@ export function createApi(db, opts = {}) {
     })).filter((t) => t.sites.length || RANK[t.role] >= RANK.reader);
   });
 
+  const ipv6On = () => one("SELECT value FROM settings WHERE key='ipv6_enabled'")?.value === '1';
   function tenantInput(b) {
     const name = str(b.name, 80);
     if (!name) throw bad('Nazwa tenanta jest wymagana');
-    return { name, description: str(b.description) };
+    return { name, description: str(b.description), ipv6: b.ipv6 === undefined ? undefined : b.ipv6 && ipv6On() ? 1 : 0 };
   }
   route('POST', '/api/tenants', ({ body, user }) => unique(() => {
     needGlobalAdmin(user);
     const t = tenantInput(body);
-    const r = run('INSERT INTO tenants (name, description) VALUES (?,?)', t.name, t.description);
+    const r = run('INSERT INTO tenants (name, description, ipv6) VALUES (?,?,?)', t.name, t.description, t.ipv6 ?? 0);
     log('create', 'tenant', t.name);
     return { id: Number(r.lastInsertRowid), ...t };
   }));
@@ -371,7 +372,7 @@ export function createApi(db, opts = {}) {
     must(one('SELECT id FROM tenants WHERE id=?', params.id), 'Tenant');
     needTenant(user, Number(params.id), 'admin');
     const t = tenantInput(body);
-    run('UPDATE tenants SET name=?, description=? WHERE id=?', t.name, t.description, params.id);
+    run('UPDATE tenants SET name=?, description=?, ipv6=COALESCE(?, ipv6) WHERE id=?', t.name, t.description, t.ipv6 ?? null, params.id);
     log('update', 'tenant', t.name);
     return { id: Number(params.id), ...t };
   }));
@@ -407,9 +408,10 @@ export function createApi(db, opts = {}) {
     return { ok: true };
   });
 
-  // A VLAN id is one subnet within a location.
+  // A VLAN id is one subnet within a location (no VLAN counts as VLAN 1); different locations and tenants may reuse ids.
   function vlanFree(siteId, vlan, selfId = 0) {
-    const o = one('SELECT name, cidr FROM networks WHERE site_id=? AND vlan=? AND id!=?', siteId, vlan, selfId);
+    vlan ??= 1;
+    const o = one('SELECT name, cidr FROM networks WHERE site_id=? AND COALESCE(vlan,1)=? AND id!=?', siteId, vlan, selfId);
     if (o) throw new HttpError(409, `VLAN ${vlan} jest już używany przez sieć „${o.name}” (${o.cidr}) w tej lokalizacji`);
   }
   route('POST', '/api/sites/:id/networks', ({ params, body, user }) => unique(() => {
@@ -748,63 +750,107 @@ export function createApi(db, opts = {}) {
     return out;
   });
 
-  // ---------- address planning: pools and VLANs per tenant ----------
+  // ---------- address planning: pools (tenant level) carved into networks (VLAN + subnet) for sites ----------
+  const tenantV6 = (tenantId) => ipv6On() && !!one('SELECT ipv6 FROM tenants WHERE id=?', tenantId)?.ipv6;
   function poolInput(b, tenantId, selfId = null) {
-    const site_id = Number(b.site_id);
-    if (!b.site_id || !one('SELECT id FROM sites WHERE id=? AND tenant_id=?', site_id, tenantId)) throw bad('Wybierz lokalizację puli');
-    const cidr = normalizeCidr(b.cidr);
-    if (!cidr) throw bad('Nieprawidłowy CIDR puli (np. 10.0.0.0/8)');
-    const c = parseCidr(cidr);
+    const raw = str(b.cidr, 60);
+    const six = v6.isV6(raw);
+    if (six && !tenantV6(tenantId)) throw bad('Ten tenant nie obsługuje IPv6 (włącz IPv6 w ustawieniach tenanta)');
+    const cidr = six ? v6.normalizeCidr6(raw) : normalizeCidr(raw);
+    if (!cidr) throw bad(six ? 'Nieprawidłowy prefiks IPv6 puli (np. fd00::/48)' : 'Nieprawidłowy CIDR puli (np. 10.0.0.0/8)');
     for (const o of all('SELECT * FROM pools WHERE tenant_id=? AND id!=?', tenantId, selfId ?? 0)) {
-      const oc = parseCidr(o.cidr);
-      if (c.first <= oc.last && oc.first <= c.last) throw new HttpError(409, `Pula nakłada się z pulą ${o.cidr}${o.name ? ` („${o.name}”)` : ''}`);
+      if (v6.isV6(o.cidr) !== six) continue;
+      const hit = six ? (() => { const a = v6.parseCidr6(cidr), c = v6.parseCidr6(o.cidr); return a.first <= c.last && c.first <= a.last; })()
+        : (() => { const a = parseCidr(cidr), c = parseCidr(o.cidr); return a.first <= c.last && c.first <= a.last; })();
+      if (hit) throw new HttpError(409, `Pula nakłada się z pulą ${o.cidr}${o.name ? ` („${o.name}”)` : ''}`);
     }
-    return { cidr, site_id, name: str(b.name, 80), description: str(b.description) };
+    return { cidr, name: str(b.name, 80), description: str(b.description) };
   }
   const tenantNets = (tenantId) => all(`SELECT n.*, s.name AS site_name FROM networks n JOIN sites s ON s.id=n.site_id WHERE s.tenant_id=? ORDER BY n.id`, tenantId)
     .map((n) => ({ ...n, c: parseCidr(n.cidr) }));
+  const tenantPrefixes6 = (tenantId) => all(`SELECT p.*, s.name AS site_name FROM v6_prefixes p JOIN sites s ON s.id=p.site_id WHERE p.tenant_id=? ORDER BY p.id`, tenantId)
+    .map((p) => ({ ...p, c: v6.parseCidr6(p.cidr) }));
+  // prefix length that fits `hosts` usable addresses (network and broadcast excluded)
+  const prefixForHosts = (hosts) => {
+    const h = Number(hosts);
+    if (!Number.isInteger(h) || h < 1 || h > 65534) throw bad('Liczba hostów musi być z zakresu 1–65534');
+    return 32 - Math.ceil(Math.log2(h + 2));
+  };
+  const prefixOf = (b, pc) => {
+    const prefix = b.hosts !== undefined && b.hosts !== '' && b.hosts != null ? prefixForHosts(b.hosts) : Number(b.prefix);
+    if (!Number.isInteger(prefix) || prefix < Math.max(16, pc.prefix) || prefix > 30) throw bad('Podaj liczbę hostów albo prefiks 16–30 (nie mniej niż pula)');
+    return prefix;
+  };
 
   route('GET', '/api/tenants/:id/plan', ({ params, user }) => {
     const tenant = must(one('SELECT * FROM tenants WHERE id=?', params.id), 'Tenant');
     needTenant(user, tenant.id, 'reader');
+    const six = tenantV6(tenant.id);
     const nets = tenantNets(tenant.id).map((n) => {
       const [lo, hi] = usableRange(n.cidr);
       const used = one("SELECT COUNT(*) AS n FROM entries WHERE network_id=? AND status!='free'", n.id).n;
       return { id: n.id, name: n.name, cidr: n.cidr, vlan: n.vlan, site_id: n.site_id, site: n.site_name, used, total: hi - lo + 1, c: n.c };
     });
     const pub = ({ c, ...n }) => n;
-    const pools = all('SELECT p.*, s.name AS site FROM pools p LEFT JOIN sites s ON s.id=p.site_id WHERE p.tenant_id=? ORDER BY p.id', tenant.id).map((p) => ({ ...p, c: parseCidr(p.cidr) }));
+    const allPools = all('SELECT * FROM pools WHERE tenant_id=? ORDER BY id', tenant.id);
+    const pools4 = allPools.filter((p) => !v6.isV6(p.cidr)).map((p) => ({ ...p, c: parseCidr(p.cidr) }));
     const inside = (n, p) => n.c.first >= p.c.first && n.c.last <= p.c.last;
-    const out = pools.map((p) => {
+    const out = pools4.map((p) => {
       const mine = nets.filter((n) => n.c.first <= p.c.last && p.c.first <= n.c.last);
       const taken = mergeRanges(mine.map((n) => ({ first: Math.max(n.c.first, p.c.first), last: Math.min(n.c.last, p.c.last) })));
       const allocated = taken.reduce((s, r) => s + r.last - r.first + 1, 0);
       const free = freeBlocks(p.c, mine.map((n) => n.c));
+      const bySite = {};
+      for (const n of mine.filter((x) => inside(x, p))) bySite[n.site_id] = (bySite[n.site_id] ?? 0) + n.c.size;
       return {
-        id: p.id, name: p.name, cidr: p.cidr, site_id: p.site_id, site: p.site, description: p.description, size: p.c.size, allocated, free: p.c.size - allocated,
+        id: p.id, family: 4, name: p.name, cidr: p.cidr, description: p.description, size: p.c.size, allocated, free: p.c.size - allocated,
         allocations: mine.filter((n) => inside(n, p)).sort((a, b) => a.c.first - b.c.first).map(pub),
+        by_site: Object.entries(bySite).map(([site_id, addresses]) => ({ site_id: Number(site_id), addresses })),
         free_blocks: free.slice(0, 64).map(({ cidr, size }) => ({ cidr, size })), free_block_count: free.length,
         largest_free: free.length ? Math.max(...free.map((f) => f.size)) : 0,
       };
     });
     const conflicts = [];
-    for (const p of pools) for (const n of nets) {
+    for (const p of pools4) for (const n of nets) {
       if (n.c.first <= p.c.last && p.c.first <= n.c.last && !inside(n, p)) conflicts.push({ kind: 'straddle', text: `Sieć ${n.cidr} („${n.name}”, ${n.site}) wystaje poza pulę ${p.cidr}` });
     }
-    const inAnyPool = (n) => pools.some((p) => inside(n, p));
+    const inAnyPool = (n) => pools4.some((p) => inside(n, p));
     for (let i = 0; i < nets.length; i++) for (let j = i + 1; j < nets.length; j++) {
       const [a, b] = [nets[i], nets[j]];
       if (a.site_id !== b.site_id && a.c.first <= b.c.last && b.c.first <= a.c.last && (inAnyPool(a) || inAnyPool(b))) {
         conflicts.push({ kind: 'overlap', text: `Sieci ${a.cidr} („${a.name}”, ${a.site}) i ${b.cidr} („${b.name}”, ${b.site}) nakładają się` });
       }
     }
-    for (const p of pools) for (const n of nets) {
-      if (inside(n, p) && p.site_id != null && n.site_id !== p.site_id) conflicts.push({ kind: 'site', text: `Sieć ${n.cidr} („${n.name}”) leży w puli ${p.cidr} przypisanej do lokalizacji ${p.site}, a należy do ${n.site}` });
+    const sites = all('SELECT id, name FROM sites WHERE tenant_id=? ORDER BY name COLLATE NOCASE', tenant.id);
+    const siteStats = sites.map((s) => {
+      const mine = nets.filter((n) => n.site_id === s.id);
+      return { ...s, networks: mine.length, addresses: mine.reduce((a, n) => a + n.c.size, 0), vlans: [...new Set(mine.map((n) => n.vlan ?? 1))].sort((a, b) => a - b) };
+    });
+    const pool6 = [], prefixes6 = six ? tenantPrefixes6(tenant.id) : [];
+    if (six) {
+      for (const p of allPools.filter((x) => v6.isV6(x.cidr))) {
+        const pc = v6.parseCidr6(p.cidr);
+        const mine = prefixes6.filter((x) => x.c.first >= pc.first && x.c.last <= pc.last);
+        const taken = mine.reduce((a, x) => a + x.c.size, 0n);
+        const next = {};
+        for (const bits of [48, 56, 60, 64]) if (bits >= pc.prefix) next[bits] = v6.findFree6(pc, prefixes6.map((x) => x.c), bits);
+        pool6.push({
+          id: p.id, family: 6, name: p.name, cidr: p.cidr, description: p.description, prefix: pc.prefix,
+          allocated_64: String(taken >> 64n), total_64: pc.prefix <= 64 ? String(pc.size >> 64n) : '0',
+          pct: Number((taken * 10000n) / pc.size) / 100,
+          allocations: mine.sort((a, b) => (a.c.first < b.c.first ? -1 : 1)).map(({ c, ...x }) => x), next,
+        });
+      }
     }
+    const totals = {
+      pools: out.length, networks: nets.length, sites: sites.length,
+      addresses: out.reduce((a, p) => a + p.size, 0), allocated: out.reduce((a, p) => a + p.allocated, 0),
+      largest_free: Math.max(0, ...out.map((p) => p.largest_free)), unpooled: nets.filter((n) => !inAnyPool(n)).length, conflicts: conflicts.length,
+    };
     return {
-      tenant: { id: tenant.id, name: tenant.name }, role: auth.effectiveTenant(auth.rolesOf(user.id), tenant.id),
-      sites: all('SELECT id, name FROM sites WHERE tenant_id=? ORDER BY name COLLATE NOCASE', tenant.id),
-      pools: out, unpooled: nets.filter((n) => !inAnyPool(n)).map(pub), conflicts,
+      tenant: { id: tenant.id, name: tenant.name, description: tenant.description, ipv6: !!tenant.ipv6 }, ipv6: six, ipv6_enabled: ipv6On(),
+      role: auth.effectiveTenant(auth.rolesOf(user.id), tenant.id), sites, site_stats: siteStats,
+      pools: out, pools6: pool6, unpooled: nets.filter((n) => !inAnyPool(n)).map(pub), conflicts, totals,
     };
   });
 
@@ -812,7 +858,7 @@ export function createApi(db, opts = {}) {
     must(one('SELECT id FROM tenants WHERE id=?', params.id), 'Tenant');
     needTenant(user, Number(params.id), 'admin');
     const p = poolInput(body, Number(params.id));
-    const r = run('INSERT INTO pools (tenant_id, site_id, name, cidr, description) VALUES (?,?,?,?,?)', params.id, p.site_id, p.name, p.cidr, p.description);
+    const r = run('INSERT INTO pools (tenant_id, name, cidr, description) VALUES (?,?,?,?)', params.id, p.name, p.cidr, p.description);
     log('create', 'pool', `${p.cidr}${p.name ? ` (${p.name})` : ''}`);
     return { id: Number(r.lastInsertRowid), tenant_id: Number(params.id), ...p };
   }));
@@ -820,7 +866,7 @@ export function createApi(db, opts = {}) {
     const old = must(one('SELECT * FROM pools WHERE id=?', params.id), 'Pula');
     needTenant(user, old.tenant_id, 'admin');
     const p = poolInput(body, old.tenant_id, old.id);
-    run('UPDATE pools SET site_id=?, name=?, cidr=?, description=? WHERE id=?', p.site_id, p.name, p.cidr, p.description, old.id);
+    run('UPDATE pools SET name=?, cidr=?, description=? WHERE id=?', p.name, p.cidr, p.description, old.id);
     log('update', 'pool', `${p.cidr}${p.name ? ` (${p.name})` : ''}`);
     return { id: old.id, tenant_id: old.tenant_id, ...p };
   }));
@@ -834,25 +880,30 @@ export function createApi(db, opts = {}) {
   route('GET', '/api/pools/:id/suggest', ({ params, query, user }) => {
     const p = must(one('SELECT * FROM pools WHERE id=?', params.id), 'Pula');
     needTenant(user, p.tenant_id, 'reader');
-    const prefix = Number(query.prefix);
+    if (v6.isV6(p.cidr)) {
+      const pc = v6.parseCidr6(p.cidr), prefix = Number(query.prefix);
+      if (!Number.isInteger(prefix) || prefix < pc.prefix || prefix > 127) throw bad('Nieprawidłowa długość prefiksu (nie mniej niż pula)');
+      const cidr = v6.findFree6(pc, tenantPrefixes6(p.tenant_id).map((x) => x.c), prefix);
+      if (!cidr) throw new HttpError(404, `W puli ${p.cidr} nie ma wolnego bloku /${prefix}`);
+      return { cidr };
+    }
     const pc = parseCidr(p.cidr);
-    if (!Number.isInteger(prefix) || prefix < Math.max(16, pc.prefix) || prefix > 30) throw bad('Nieprawidłowa długość prefiksu (16–30, nie mniej niż pula)');
+    const prefix = prefixOf(query, pc);
     const cidr = findFree(pc, tenantNets(p.tenant_id).map((n) => n.c), prefix);
     if (!cidr) throw new HttpError(404, `W puli ${p.cidr} nie ma wolnego bloku /${prefix}`);
-    return { cidr };
+    return { cidr, prefix };
   });
-  // Carves a subnet out of a pool and creates it as a network of the pool's location.
+  // Hands a subnet of a pool to a site: an IPv4 pool creates a network, an IPv6 pool a planned prefix.
   route('POST', '/api/pools/:id/allocate', ({ params, body, user }) => unique(() => {
     const p = must(one('SELECT * FROM pools WHERE id=?', params.id), 'Pula');
-    const site = must(one('SELECT * FROM sites WHERE id=?', p.site_id), 'Lokalizacja puli');
+    const site = must(one('SELECT * FROM sites WHERE id=? AND tenant_id=?', body.site_id, p.tenant_id), 'Lokalizacja');
     need(user, site.id, 'admin');
+    if (v6.isV6(p.cidr)) return allocate6(p, site, body);
     const pc = parseCidr(p.cidr);
     let cidr = body.cidr ? normalizeCidr(body.cidr) : null;
     if (!cidr) {
-      const prefix = Number(body.prefix);
-      if (!Number.isInteger(prefix) || prefix < Math.max(16, pc.prefix) || prefix > 30) throw bad('Podaj CIDR albo prefiks 16–30');
-      cidr = findFree(pc, tenantNets(p.tenant_id).map((n) => n.c), prefix);
-      if (!cidr) throw new HttpError(404, `W puli ${p.cidr} nie ma wolnego bloku /${prefix}`);
+      cidr = findFree(pc, tenantNets(p.tenant_id).map((n) => n.c), prefixOf(body, pc));
+      if (!cidr) throw new HttpError(404, `W puli ${p.cidr} nie ma wolnego bloku o takim rozmiarze`);
     }
     const c = parseCidr(cidr);
     if (c.first < pc.first || c.last > pc.last) throw bad(`Blok ${cidr} leży poza pulą ${p.cidr}`);
@@ -864,6 +915,104 @@ export function createApi(db, opts = {}) {
       VALUES (?,?,?,?,?,?,?,?,?,?)`, site.id, n.name, n.cidr, n.vlan, n.gateway, n.dhcp_start, n.dhcp_end, n.dns, n.description, n.auto_scan);
     log('create', 'network', `${n.name} (${n.cidr}) z puli ${p.cidr}`);
     return { id: Number(r.lastInsertRowid), site_id: site.id, ...n };
+  }));
+  function allocate6(p, site, body) {
+    const pc = v6.parseCidr6(p.cidr);
+    const used = tenantPrefixes6(p.tenant_id);
+    let cidr = body.cidr ? v6.normalizeCidr6(body.cidr) : null;
+    if (!cidr) {
+      const prefix = Number(body.prefix ?? 64);
+      if (!Number.isInteger(prefix) || prefix < pc.prefix || prefix > 127) throw bad('Nieprawidłowa długość prefiksu');
+      cidr = v6.findFree6(pc, used.map((x) => x.c), prefix);
+      if (!cidr) throw new HttpError(404, `W puli ${p.cidr} nie ma wolnego bloku /${prefix}`);
+    }
+    const c = v6.parseCidr6(cidr);
+    if (c.first < pc.first || c.last > pc.last) throw bad(`Blok ${cidr} leży poza pulą ${p.cidr}`);
+    const clash = used.find((o) => c.first <= o.c.last && o.c.first <= c.last);
+    if (clash) throw new HttpError(409, `Blok ${cidr} nakłada się z prefiksem „${clash.name}” (${clash.cidr}, ${clash.site_name})`);
+    const vlan = vlanOf(body.vlan);
+    const dup = all('SELECT name, cidr FROM v6_prefixes WHERE site_id=? AND COALESCE(vlan,1)=?', site.id, vlan ?? 1)[0];
+    if (dup) throw new HttpError(409, `VLAN ${vlan ?? 1} jest już używany przez prefiks „${dup.name}” (${dup.cidr}) w tej lokalizacji`);
+    const name = str(body.name, 80);
+    if (!name) throw bad('Nazwa jest wymagana');
+    const r = run('INSERT INTO v6_prefixes (tenant_id, site_id, cidr, vlan, name, description) VALUES (?,?,?,?,?,?)', p.tenant_id, site.id, cidr, vlan, name, str(body.description));
+    log('create', 'prefix', `${name} (${cidr}) z puli ${p.cidr}`);
+    return { id: Number(r.lastInsertRowid), site_id: site.id, cidr, vlan, name };
+  }
+  function vlanOf(v) {
+    if (v === '' || v == null) return null;
+    const n = Number(v);
+    if (!Number.isInteger(n) || n < 1 || n > 4094) throw bad('VLAN musi być w zakresie 1–4094');
+    return n;
+  }
+  route('PUT', '/api/v6-prefixes/:id', ({ params, body, user }) => unique(() => {
+    const old = must(one('SELECT * FROM v6_prefixes WHERE id=?', params.id), 'Prefiks');
+    const site = must(one('SELECT * FROM sites WHERE id=? AND tenant_id=?', body.site_id ?? old.site_id, old.tenant_id), 'Lokalizacja');
+    need(user, old.site_id, 'admin'); need(user, site.id, 'admin');
+    const vlan = vlanOf(body.vlan);
+    const dup = all('SELECT name, cidr FROM v6_prefixes WHERE site_id=? AND COALESCE(vlan,1)=? AND id!=?', site.id, vlan ?? 1, old.id)[0];
+    if (dup) throw new HttpError(409, `VLAN ${vlan ?? 1} jest już używany przez prefiks „${dup.name}” (${dup.cidr}) w tej lokalizacji`);
+    const name = str(body.name, 80);
+    if (!name) throw bad('Nazwa jest wymagana');
+    run('UPDATE v6_prefixes SET site_id=?, vlan=?, name=?, description=? WHERE id=?', site.id, vlan, name, str(body.description), old.id);
+    log('update', 'prefix', `${name} (${old.cidr})`);
+    return { id: old.id, site_id: site.id, cidr: old.cidr, vlan, name };
+  }));
+  route('DELETE', '/api/v6-prefixes/:id', ({ params, user }) => {
+    const p = must(one('SELECT * FROM v6_prefixes WHERE id=?', params.id), 'Prefiks');
+    need(user, p.site_id, 'admin');
+    run('DELETE FROM v6_prefixes WHERE id=?', p.id);
+    log('delete', 'prefix', `${p.name} (${p.cidr})`);
+    return { ok: true };
+  });
+
+  // VLSM: place several subnets (given as host counts) into a pool, biggest first, each at the first free aligned block.
+  // Without `apply` it only reports the layout; with it the networks are created (all or nothing).
+  route('POST', '/api/pools/:id/vlsm', ({ params, body, user }) => unique(() => {
+    const p = must(one('SELECT * FROM pools WHERE id=?', params.id), 'Pula');
+    if (v6.isV6(p.cidr)) throw bad('Planer VLSM działa dla pul IPv4');
+    needTenant(user, p.tenant_id, body.apply ? 'admin' : 'reader');
+    const reqs = Array.isArray(body.requests) ? body.requests : [];
+    if (!reqs.length || reqs.length > 100) throw bad('Dodaj od 1 do 100 podsieci');
+    const pc = parseCidr(p.cidr);
+    const used = tenantNets(p.tenant_id).map((n) => n.c);
+    const items = reqs.map((r, i) => {
+      const name = str(r.name, 80);
+      let prefix = null, error = '';
+      try { prefix = prefixOf(r, pc); } catch (e) { error = e.message; }
+      if (!name) error ||= 'Nazwa jest wymagana';
+      return { i, name, hosts: r.hosts ?? null, prefix, vlan: r.vlan === '' ? null : r.vlan ?? null, site_id: r.site_id ?? body.site_id ?? null, cidr: null, error };
+    });
+    for (const it of [...items].filter((x) => !x.error).sort((a, b) => a.prefix - b.prefix || a.i - b.i)) {
+      const cidr = findFree(pc, used, it.prefix);
+      if (!cidr) { it.error = `Brak miejsca na /${it.prefix} w puli ${p.cidr}`; continue; }
+      it.cidr = cidr; used.push(parseCidr(cidr));
+    }
+    const ok = items.every((x) => !x.error);
+    const free = freeBlocks(pc, used).slice(0, 16).map(({ cidr, size }) => ({ cidr, size }));
+    const result = { items, ok, free_after: free, applied: false };
+    if (!body.apply) return result;
+    if (!ok) throw new HttpError(409, items.find((x) => x.error).error);
+    db.exec('BEGIN');
+    try {
+      const planned = new Map();
+      for (const it of items) {
+        const site = must(one('SELECT * FROM sites WHERE id=? AND tenant_id=?', it.site_id, p.tenant_id), 'Lokalizacja');
+        need(user, site.id, 'admin');
+        const n = netInput({ gateway: 'first', name: it.name, cidr: it.cidr, vlan: it.vlan });
+        const key = `${site.id}:${n.vlan ?? 1}`;
+        if (planned.has(key)) throw new HttpError(409, `VLAN ${n.vlan ?? 1} jest użyty dwa razy w lokalizacji „${site.name}”`);
+        planned.set(key, 1);
+        vlanFree(site.id, n.vlan);
+        const r = run(`INSERT INTO networks (site_id, name, cidr, vlan, gateway, dhcp_start, dhcp_end, dns, description, auto_scan) VALUES (?,?,?,?,?,?,?,?,?,0)`,
+          site.id, n.name, n.cidr, n.vlan, n.gateway, '', '', '', `Z planera VLSM (pula ${p.cidr})`);
+        it.network_id = Number(r.lastInsertRowid);
+        log('create', 'network', `${n.name} (${n.cidr}) z planera VLSM`);
+      }
+      db.exec('COMMIT');
+    } catch (e) { db.exec('ROLLBACK'); throw e; }
+    result.applied = true;
+    return result;
   }));
 
   // ---------- consistency checks ----------
@@ -922,7 +1071,7 @@ export function createApi(db, opts = {}) {
     const me = user ? meOf(user) : null;
     if (me?.global_role === 'admin') me.pending_users = noRoleCount();
     if (me) { me.google_email = auth.identityOf(user.id, 'google'); me.has_password = auth.hasPassword(user.id); me.totp = auth.totpEnabled(user.id); me.recovery_left = me.totp ? auth.recoveryLeft(user.id) : 0; }
-    return { user: me, setup_required: count('users') === 0, registration_open: registrationOpen(), google_login: googleLogin().ready, version: opts.version ?? 'dev' };
+    return { user: me, setup_required: count('users') === 0, registration_open: registrationOpen(), google_login: googleLogin().ready, ipv6_enabled: ipv6On(), version: opts.version ?? 'dev' };
   }, { public: true });
   // Prometheus text exposition. Authenticate with a personal API token (Authorization: Bearer); only networks the token's owner can read are listed.
   const esc = (v) => String(v ?? '').replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n');
@@ -933,7 +1082,7 @@ export function createApi(db, opts = {}) {
     const rows = all(`SELECT n.*, s.name AS site_name, t.name AS tenant_name FROM networks n JOIN sites s ON s.id=n.site_id JOIN tenants t ON t.id=s.tenant_id ORDER BY t.name, s.name, n.cidr`)
       .filter((n) => sites.has(n.site_id)).map((n) => ({ n, st: netStats(n),
         seen: one('SELECT MAX(last_seen) AS m FROM entries WHERE network_id=?', n.id).m }));
-    const lab = ({ n }) => `tenant="${esc(n.tenant_name)}",site="${esc(n.site_name)}",network="${esc(n.name)}",cidr="${n.cidr}",vlan="${n.vlan ?? ''}"`;
+    const lab = ({ n }) => `tenant="${esc(n.tenant_name)}",site="${esc(n.site_name)}",network="${esc(n.name)}",cidr="${n.cidr}",vlan="${n.vlan ?? 1}"`;
     const series = (name, help, f) => { fam(name, help); for (const r of rows) { const v = f(r); if (v != null) out.push(`${name}{${lab(r)}} ${v}`); } };
     series('ipam_network_addresses_total', 'Usable addresses in the network', (r) => r.st.total);
     series('ipam_network_addresses_used', 'Addresses with an entry that is not free', (r) => r.st.used + r.st.infra);
@@ -1053,9 +1202,10 @@ export function createApi(db, opts = {}) {
   }, { public: true });
   route('PUT', '/api/settings', ({ body, user }) => {
     needGlobalAdmin(user);
-    run("INSERT INTO settings (key, value) VALUES ('registration_open', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", body.registration_open ? '1' : '0');
-    log('update', 'settings', `rejestracja: ${body.registration_open ? 'otwarta' : 'wyłączona'}`);
-    return { registration_open: !!body.registration_open };
+    const put = (k, v) => run('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value', k, v);
+    if (body.registration_open !== undefined) { put('registration_open', body.registration_open ? '1' : '0'); log('update', 'settings', `rejestracja: ${body.registration_open ? 'otwarta' : 'wyłączona'}`); }
+    if (body.ipv6_enabled !== undefined) { put('ipv6_enabled', body.ipv6_enabled ? '1' : '0'); log('update', 'settings', `IPv6: ${body.ipv6_enabled ? 'włączone' : 'wyłączone'}`); }
+    return { registration_open: registrationOpen(), ipv6_enabled: ipv6On() };
   });
   // ---------- admin: system & backups ----------
   const bdeps = () => ({ dir: opts.backupDir, fetch: opts.fetch, gcsBase: opts.gcsBase });

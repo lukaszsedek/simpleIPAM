@@ -673,3 +673,39 @@ tr.flash td, tr.flash { animation: flash 3.2s var(--ease); }
 pre.recovery { margin: 0; padding: 12px 14px; border-radius: 12px; background: var(--surface-2); border: 1px solid var(--border); font-size: 14px; line-height: 1.7; user-select: all; }
 .modal p { white-space: pre-line; }
 .menu button .chip { margin-left: auto; }
+
+/* planning dashboard, VLSM planner, calculator */
+.stat-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(128px, 1fr)); gap: 12px; }
+.stat-tile { display: flex; flex-direction: column; gap: 2px; padding: 14px 16px; border-radius: 14px; background: var(--surface); border: 1px solid var(--border); }
+.stat-tile b { font-size: 24px; font-weight: 600; letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
+.stat-tile span { color: var(--muted); font-size: 12.5px; }
+.stat-tile small { font-size: 11.5px; }
+.stat-tile.bad b { color: var(--danger); }
+.pool-map { display: grid; gap: 10px; }
+.pool-map-row { display: grid; grid-template-columns: minmax(110px, 190px) 1fr 52px; gap: 12px; align-items: center; }
+.pool-map-label { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pool-map-pct { text-align: right; font-size: 12.5px; font-variant-numeric: tabular-nums; }
+.meter { height: 6px; border-radius: 999px; background: var(--surface-2); margin-top: 14px; overflow: hidden; }
+.meter i { display: block; height: 100%; background: var(--accent); border-radius: inherit; }
+.pool-seg.v6 { background: var(--accent); }
+.section-title { margin: 8px 0 0; font-size: 15px; letter-spacing: .02em; }
+.check { display: flex; gap: 10px; align-items: flex-start; }
+.check input { width: auto; margin-top: 3px; }
+.segmented.small { width: fit-content; }
+.calc-line { margin: 0; font-variant-numeric: tabular-nums; }
+.calc-grid { display: grid; grid-template-columns: max-content 1fr; gap: 6px 18px; margin: 12px 0 0; }
+.calc-grid dt { color: var(--muted); font-size: 13px; }
+.calc-grid dd { margin: 0; word-break: break-all; }
+.vlsm-rows { display: grid; gap: 8px; margin: 12px 0; }
+.vlsm-row { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(0, .8fr) 44px minmax(0, .6fr) 36px; gap: 8px; align-items: center; }
+.vlsm-row input { width: 100%; }
+.vlsm-prefix { text-align: center; }
+tr.hit td { background: var(--accent-soft); }
+textarea.mono { width: 100%; resize: vertical; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--border); background: var(--surface); color: inherit; }
+@media (max-width: 560px) {
+  .pool-map-row { grid-template-columns: 1fr 46px; }
+  .pool-map-label { grid-column: 1 / -1; }
+  .vlsm-row { grid-template-columns: 1fr 1fr 36px; }
+  .vlsm-row .vlsm-prefix { display: none; }
+}
+.table-wrap:not(:last-child) { margin-bottom: 12px; }   /* the negative bottom margin only makes sense when the table ends the card */

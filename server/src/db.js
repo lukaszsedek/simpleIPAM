@@ -1,7 +1,6 @@
 import { DatabaseSync } from 'node:sqlite';
 import { mkdirSync, renameSync, rmSync } from 'node:fs';
 import { dirname } from 'node:path';
-import { parseCidr } from './ip.js';
 
 // Databases created before tenants existed have no sites.tenant_id / role_assignments.tenant_id.
 // Existing sites move into a "Domyślny" tenant and every role assignment is kept. A snapshot is
@@ -174,7 +173,8 @@ function openRaw(path) {
       CHECK (tenant_id IS NULL OR site_id IS NULL)
     );
     -- Address space planning: a pool is a big block (10.0.0.0/8) a tenant hands out to its sites as subnets;
-    -- Every pool belongs to a site (pools.site_id, added below); a network is a VLAN id + subnet, there is no separate VLAN registry.
+    -- A pool is a tenant-level block (IPv4, or IPv6 when the tenant plans it); its subnets are handed to sites as networks.
+    -- A network is a VLAN id + subnet (no VLAN = the default network, VLAN 1); there is no separate VLAN registry.
     CREATE TABLE IF NOT EXISTS pools (
       id INTEGER PRIMARY KEY,
       tenant_id INTEGER NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
@@ -209,21 +209,20 @@ function openRaw(path) {
   addColumn('users', 'totp_enabled', 'INTEGER NOT NULL DEFAULT 0');
   addColumn('users', 'totp_last', 'INTEGER NOT NULL DEFAULT 0');         // last accepted 30 s step (replay guard)
   addColumn('users', 'totp_recovery', "TEXT NOT NULL DEFAULT '[]'");     // JSON array of sha256 hashes of unused recovery codes
-  addColumn('pools', 'site_id', 'INTEGER REFERENCES sites(id) ON DELETE SET NULL');
-  // Older pools floated at tenant level: hand each to the site that already holds most of its networks (else the first site).
-  // The legacy `vlans` registry table is left in place, unused, so no data is lost.
-  for (const p of db.prepare('SELECT * FROM pools WHERE site_id IS NULL').all()) {
-    const nets = db.prepare('SELECT n.site_id, n.cidr FROM networks n JOIN sites s ON s.id=n.site_id WHERE s.tenant_id=?').all(p.tenant_id);
-    const pc = parseCidr(p.cidr);
-    const count = new Map();
-    for (const n of nets) {
-      const c = parseCidr(n.cidr);
-      if (c && pc && c.first >= pc.first && c.last <= pc.last) count.set(n.site_id, (count.get(n.site_id) ?? 0) + 1);
-    }
-    const best = [...count.entries()].sort((x, y) => y[1] - x[1] || x[0] - y[0])[0]?.[0]
-      ?? db.prepare('SELECT id FROM sites WHERE tenant_id=? ORDER BY id LIMIT 1').get(p.tenant_id)?.id ?? null;
-    if (best != null) db.prepare('UPDATE pools SET site_id=? WHERE id=?').run(best, p.id);
-  }
+  addColumn('tenants', 'ipv6', 'INTEGER NOT NULL DEFAULT 0');   // tenant plans IPv6 prefixes too (needs the global ipv6_enabled setting)
+  db.exec(`
+    -- IPv6 allocations (planning only): a prefix carved out of an IPv6 pool and given to a site.
+    CREATE TABLE IF NOT EXISTS v6_prefixes (
+      id INTEGER PRIMARY KEY,
+      tenant_id INTEGER NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+      site_id INTEGER NOT NULL REFERENCES sites(id) ON DELETE CASCADE,
+      cidr TEXT NOT NULL,
+      vlan INTEGER,
+      name TEXT NOT NULL DEFAULT '',
+      description TEXT NOT NULL DEFAULT '',
+      UNIQUE (tenant_id, cidr)
+    );
+  `);
   if (!db.prepare('PRAGMA table_info(audit)').all().some((c) => c.name === 'actor')) {
     db.exec("ALTER TABLE audit ADD COLUMN actor TEXT NOT NULL DEFAULT ''");
   }

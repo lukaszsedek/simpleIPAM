@@ -523,31 +523,52 @@ test('planning: pools, allocation to locations, conflicts, VLAN registry and per
   const a = await mkSite(admin, 'dom1');
   const b = await mkSite(admin, 'dom2');
   const tenantId = a.tenant_id;
-  await assert.rejects(admin('POST', `/api/tenants/${tenantId}/pools`, { cidr: '10.0.0.0/8' }), /lokalizację/);   // a pool always belongs to a site
-  const pool = await admin('POST', `/api/tenants/${tenantId}/pools`, { site_id: a.id, cidr: '10.0.0.0/8', name: 'Korpo' });
-  await assert.rejects(admin('POST', `/api/tenants/${tenantId}/pools`, { site_id: a.id, cidr: '10.1.0.0/16' }), /nakłada się z pulą/);
+  const pool = await admin('POST', `/api/tenants/${tenantId}/pools`, { cidr: '10.0.0.0/8', name: 'Korpo' });
+  await admin('POST', `/api/tenants/${tenantId}/pools`, { cidr: '192.168.0.0/16' });                    // a tenant may have many pools
+  await assert.rejects(admin('POST', `/api/tenants/${tenantId}/pools`, { cidr: '10.1.0.0/16' }), /nakłada się z pulą/);
   assert.equal((await admin('GET', `/api/pools/${pool.id}/suggest`, {}, { prefix: 24 })).cidr, '10.0.0.0/24');
+  assert.deepEqual(await admin('GET', `/api/pools/${pool.id}/suggest`, {}, { hosts: 100 }), { cidr: '10.0.0.0/25', prefix: 25 });   // 100 hosts -> /25
 
-  const n1 = await admin('POST', `/api/pools/${pool.id}/allocate`, { name: 'LAN', prefix: 24, vlan: 10 });
+  const n1 = await admin('POST', `/api/pools/${pool.id}/allocate`, { site_id: a.id, name: 'LAN', prefix: 24, vlan: 10 });
   assert.equal(n1.cidr, '10.0.0.0/24');
-  assert.equal(n1.site_id, a.id);                 // the network lands in the pool's site
   assert.equal(n1.gateway, '10.0.0.1');
-  await assert.rejects(admin('POST', `/api/pools/${pool.id}/allocate`, { name: 'x', prefix: 24 }), /VLAN jest wymagany/);
-  await assert.rejects(admin('POST', `/api/pools/${pool.id}/allocate`, { name: 'x', prefix: 24, vlan: 10 }), /VLAN 10 jest już używany/);
-  const n2 = await admin('POST', `/api/pools/${pool.id}/allocate`, { name: 'IoT', prefix: 23, vlan: 20 });
-  assert.equal(n2.cidr, '10.0.2.0/23');          // /23 must be aligned, so it skips .1.0
-  await assert.rejects(admin('POST', `/api/pools/${pool.id}/allocate`, { name: 'x', cidr: '10.0.0.128/25', vlan: 30 }), /nakłada się/);
-  await assert.rejects(admin('POST', `/api/pools/${pool.id}/allocate`, { name: 'x', cidr: '192.168.0.0/24', vlan: 30 }), /poza pulą/);
+  const dflt = await admin('POST', `/api/pools/${pool.id}/allocate`, { site_id: a.id, name: 'Domyślna', hosts: 20 });   // no VLAN = the default network (VLAN 1)
+  assert.deepEqual([dflt.cidr, dflt.vlan], ['10.0.1.0/27', null]);
+  await assert.rejects(admin('POST', `/api/pools/${pool.id}/allocate`, { site_id: a.id, name: 'x', prefix: 24, vlan: 1 }), /VLAN 1 jest już używany/);   // site has VLAN 1 already
+  await assert.rejects(admin('POST', `/api/pools/${pool.id}/allocate`, { site_id: a.id, name: 'x', prefix: 24 }), /VLAN 1 jest już używany/);
+  await assert.rejects(admin('POST', `/api/pools/${pool.id}/allocate`, { site_id: a.id, name: 'x', prefix: 24, vlan: 10 }), /VLAN 10 jest już używany/);
+  const n2 = await admin('POST', `/api/pools/${pool.id}/allocate`, { site_id: b.id, name: 'IoT', prefix: 23, vlan: 10 });   // same VLAN in another location is fine
+  assert.equal(n2.cidr, '10.0.2.0/23');          // /23 must be aligned, so it skips the used /27
+  await assert.rejects(admin('POST', `/api/pools/${pool.id}/allocate`, { site_id: b.id, name: 'x', cidr: '10.0.0.128/25', vlan: 30 }), /nakłada się/);
+  await assert.rejects(admin('POST', `/api/pools/${pool.id}/allocate`, { site_id: b.id, name: 'x', cidr: '172.16.0.0/24', vlan: 30 }), /poza pulą/);
 
   const plan = await admin('GET', `/api/tenants/${tenantId}/plan`);
   const p = plan.pools[0];
-  assert.equal(p.site_id, a.id);
-  assert.equal(p.allocated, 256 + 512);
-  assert.equal(p.free, 2 ** 24 - 768);
-  assert.deepEqual(p.allocations.map((x) => x.cidr), ['10.0.0.0/24', '10.0.2.0/23']);
-  assert.equal(p.free_blocks[0].cidr, '10.0.1.0/24');
-  assert.equal(plan.vlans, undefined);
+  assert.equal(plan.pools.length, 2);
+  assert.equal(p.allocated, 256 + 32 + 512);
+  assert.deepEqual(p.allocations.map((x) => x.cidr), ['10.0.0.0/24', '10.0.1.0/27', '10.0.2.0/23']);
+  assert.equal(p.free_blocks[0].cidr, '10.0.1.32/27');
+  assert.deepEqual(p.by_site.map((x) => [x.site_id, x.addresses]), [[a.id, 256 + 32], [b.id, 512]]);
+  assert.equal(plan.totals.pools, 2);
   assert.equal(plan.unpooled.length, 0);
+  assert.equal(plan.ipv6, false);
+  assert.deepEqual(plan.site_stats.find((s) => s.id === a.id).vlans, [1, 10]);
+
+  // VLSM: biggest first, aligned, nothing created without apply, all-or-nothing when applied
+  const reqs = [{ name: 'IoT2', hosts: 10, vlan: 40 }, { name: 'Serwery', hosts: 120, vlan: 50 }, { name: 'Goście', hosts: 50, vlan: 60 }];
+  const dry = await admin('POST', `/api/pools/${pool.id}/vlsm`, { requests: reqs, site_id: a.id });
+  assert.equal(dry.ok, true);
+  assert.deepEqual(dry.items.map((x) => [x.name, x.prefix]), [['IoT2', 28], ['Serwery', 25], ['Goście', 26]]);
+  assert.equal(new Set(dry.items.map((x) => x.cidr)).size, 3);
+  assert.equal((await admin('GET', `/api/tenants/${tenantId}/plan`)).totals.networks, 3);
+  await assert.rejects(admin('POST', `/api/pools/${pool.id}/vlsm`, { requests: [reqs[0], { name: 'dup', hosts: 5, vlan: 40 }], site_id: a.id, apply: true }), /dwa razy/);
+  assert.equal((await admin('GET', `/api/tenants/${tenantId}/plan`)).totals.networks, 3);              // rolled back
+  const applied = await admin('POST', `/api/pools/${pool.id}/vlsm`, { requests: reqs, site_id: a.id, apply: true });
+  assert.ok(applied.applied && applied.items.every((x) => x.network_id));
+  assert.equal((await admin('GET', `/api/tenants/${tenantId}/plan`)).totals.networks, 6);
+  const big = await admin('POST', `/api/pools/${(await admin('POST', `/api/tenants/${tenantId}/pools`, { cidr: '172.16.0.0/24' })).id}/vlsm`, { requests: [{ name: 'a', hosts: 200 }, { name: 'b', hosts: 200 }] });
+  assert.equal(big.ok, false);
+  assert.match(big.items[1].error, /Brak miejsca/);
 
   // an overlapping network created by hand in another location shows up as a conflict
   await admin('POST', `/api/sites/${b.id}/networks`, { name: 'dup', vlan: 118, cidr: '10.0.0.0/25' });
@@ -560,5 +581,5 @@ test('planning: pools, allocation to locations, conflicts, VLAN registry and per
   assert.equal((await reader('GET', `/api/tenants/${tenantId}/plan`)).role, 'reader');
   await assert.rejects(reader('POST', `/api/tenants/${tenantId}/pools`, { cidr: '172.16.0.0/12' }), /uprawnień/);
   await admin('DELETE', `/api/pools/${pool.id}`);
-  assert.equal((await admin('GET', `/api/tenants/${tenantId}/plan`)).unpooled.length, 3);   // networks survive their pool
+  assert.equal((await admin('GET', `/api/tenants/${tenantId}/plan`)).unpooled.length, 7);   // networks survive their pool
 });

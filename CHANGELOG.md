@@ -4,7 +4,15 @@ All notable changes to simpleIPAM are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
+### Changed
+- Planning is reworked: pools belong to the tenant (many per tenant, e.g. 10.0.0.0/8 and 192.168.0.0/16) and any subnet inside them can be handed to a location. The pool-per-location binding of 0.18.0 is gone.
+- A network's VLAN is optional again: no VLAN means the default network, which counts as VLAN 1. A VLAN id (including the implicit 1) is unique within a location; tenants and other locations may reuse it.
+- Planning lives under tenant settings (gear next to the tenant): a dashboard of all pools with totals, a map, usage per location and free blocks; a VLSM planner; a CIDR calculator; general options.
+
 ### Added
+- VLSM planner (`POST /api/pools/:id/vlsm`): give host counts, get the smallest fitting prefixes placed biggest-first into the pool; applying creates all networks or none. Allocation also accepts `hosts` instead of `prefix`.
+- CIDR calculator in the browser: mask/wildcard/range/hosts for IPv4 and IPv6, split into smaller blocks, aggregation of a network list, hosts-to-prefix table.
+- IPv6 planning, opt-in: a global switch (Administration → Settings) and a per-tenant flag. Only tenants with the flag see IPv6 pools and prefixes; prefixes (`v6_prefixes`) are planned per location, individual IPv6 addresses are not tracked.
 - Two-factor sign-in (TOTP): authenticator-app setup with QR in the profile menu, one-time recovery codes, replay protection, admin reset per user, `reset-admin` clears it. Google sign-in is unaffected.
 - `GET /api/metrics`: Prometheus metrics per network (addresses total/used, utilisation, warnings, new hosts, MAC alerts, last seen) and entries by status; scrape with an API token.
 - Excel (.xlsx) import (understands the headers of the Excel export in any app language), semicolon CSV, and a preview before anything is saved (`dry_run`). Empty cells and missing columns keep the current value.

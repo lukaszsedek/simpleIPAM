@@ -53,7 +53,7 @@ function SiteForm({ site, tenantId, onClose, onSaved, notify }) {
   );
 }
 
-function TenantForm({ tenant, onClose, onSaved, notify }) {
+function TenantForm({ tenant, onClose, onSaved, notify, ipv6 }) {
   const [f, setF] = useState(tenant ?? { name: '', description: '' });
   const submit = async (e) => {
     e.preventDefault();
@@ -64,6 +64,7 @@ function TenantForm({ tenant, onClose, onSaved, notify }) {
       <form class="form-grid" onSubmit={submit}>
         <Field label="Nazwa" span><input value={f.name} onInput={(e) => setF({ ...f, name: e.target.value })} placeholder={tx('rodzina, firma, klient-x…')} required /></Field>
         <Field label="Opis" span><input value={f.description} onInput={(e) => setF({ ...f, description: e.target.value })} /></Field>
+        {ipv6 && <label class="check span"><input type="checkbox" checked={!!f.ipv6} onChange={(e) => setF({ ...f, ipv6: e.target.checked })} /><span>{tx('Ten tenant używa IPv6')}</span></label>}
         <footer>
           <button type="button" class="btn ghost" onClick={onClose}>{tx('Anuluj')}</button>
           <button class="btn primary">{tx('Zapisz')}</button>
@@ -95,7 +96,7 @@ function NetworkForm({ net, siteId, onClose, onSaved, notify }) {
       <form class="form-grid" onSubmit={submit}>
         <Field label="Nazwa"><input value={f.name} onInput={set('name')} placeholder={tx('LAN, IoT, Goście…')} required /></Field>
         <Field label="CIDR"><input class="mono" value={f.cidr} onInput={set('cidr')} placeholder="192.168.10.0/24" required /></Field>
-        <Field label="VLAN"><input type="number" min="1" max="4094" value={f.vlan ?? ''} onInput={set('vlan')} required /></Field>
+        <Field label="VLAN" hint="puste = sieć domyślna (VLAN 1)"><input type="number" min="1" max="4094" value={f.vlan ?? ''} onInput={set('vlan')} placeholder="1" /></Field>
         <Field label="Brama">
           <input class="mono" value={f.gateway} onInput={set('gateway')} placeholder={gwOf(f.cidr, false) || '192.168.10.1'} />
           {gwOf(f.cidr, false) && <span class="gw-pick">
@@ -311,6 +312,7 @@ export function App() {
   const [regOpen, setRegOpen] = useState(true);
   const [version, setVersion] = useState('');
   const [setupRequired, setSetupRequired] = useState(false);
+  const [ipv6On, setIpv6On] = useState(false);
   const [googleReady, setGoogleReady] = useState(false);
   const [loaded, setLoaded] = useState(false);
   const [open, setOpen] = useState({});
@@ -355,7 +357,7 @@ export function App() {
       history.replaceState(null, '', `${location.pathname}${location.hash}`);
       notify(g === 'linked' ? 'Konto Google połączone' : g === 'new' ? 'Konto utworzone — poproś administratora o nadanie uprawnień' : 'Zalogowano przez Google');
     }
-    api.me().then((r) => { setMe(r.user); setRegOpen(r.registration_open); setVersion(r.version ?? ''); setSetupRequired(!!r.setup_required); setGoogleReady(!!r.google_login); }).catch(() => setMe(null));
+    api.me().then((r) => { setMe(r.user); setRegOpen(r.registration_open); setVersion(r.version ?? ''); setSetupRequired(!!r.setup_required); setGoogleReady(!!r.google_login); setIpv6On(!!r.ipv6_enabled); }).catch(() => setMe(null));
     const f = () => { setMe(null); setTenants([]); setLoaded(false); };
     addEventListener('ipam:unauth', f);
     return () => removeEventListener('ipam:unauth', f);
@@ -431,11 +433,11 @@ export function App() {
                 </button>
                 {t.role === 'admin' && <>
                   <button class="icon-btn" aria-label={tx('Dodaj lokalizację')} title={tx('Dodaj lokalizację')} onClick={() => setModal({ kind: 'site', tenantId: t.id })}><Icon name="plus" size={14} /></button>
-                  <button class="icon-btn" aria-label={tx('Edytuj tenanta')} onClick={() => setModal({ kind: 'tenant', tenant: t })}><Icon name="edit" size={14} /></button>
+                  <a class="icon-btn" aria-label={tx('Ustawienia tenanta')} title={tx('Ustawienia tenanta')} href={`#/plan/${t.id}`}><Icon name="settings" size={14} /></a>
                 </>}
               </div>
               {open[`t${t.id}`] !== false && RANK[t.role] >= RANK.reader && (
-                <a class={`side-link plan-link ${plan?.[1] === String(t.id) ? 'on' : ''}`} href={`#/plan/${t.id}`}><Icon name="map" size={15} /><span>{tx('Planowanie adresów')}</span></a>
+                <a class={`side-link plan-link ${plan?.[1] === String(t.id) ? 'on' : ''}`} href={`#/plan/${t.id}`}><Icon name="map" size={15} /><span>{tx('Ustawienia i planowanie')}</span></a>
               )}
               {open[`t${t.id}`] !== false && t.sites.map((s) => (
                 <div class="site">
@@ -451,12 +453,12 @@ export function App() {
                       {s.networks.map((n) => {
                         const pct = Math.round((n.stats.used / Math.max(1, n.stats.total)) * 100);
                         return (
-                          <a href={`#/n/${n.id}`} class={String(n.id) === netId ? 'on' : ''} title={`${n.name} · ${n.cidr}${n.vlan ? ` · VLAN ${n.vlan}` : ''}`}>
+                          <a href={`#/n/${n.id}`} class={String(n.id) === netId ? 'on' : ''} title={`${n.name} · ${n.cidr}${` · VLAN ${n.vlan ?? 1}`}`}>
                             <span class="net-top">
                               <span class="net-name">{n.name}</span>
                               {n.stats.new_hosts > 0 && <b class="badge" title={tx('Nowe urządzenia')}>{n.stats.new_hosts}</b>}
                               {n.stats.issues > 0 && <b class="badge warn" title={tx('Do sprawdzenia')}>{n.stats.issues}</b>}
-                              {n.vlan && <span class="vlan-pill">VLAN {n.vlan}</span>}
+                              <span class="vlan-pill">VLAN {n.vlan ?? 1}</span>
                             </span>
                             <span class="net-bottom"><span class="mono">{n.cidr}</span><span>{pct}%</span></span>
                             <span class="mini-bar"><i style={{ width: `${pct}%` }} /></span>
@@ -571,7 +573,7 @@ export function App() {
           )}
       </main>
 
-      {modal?.kind === 'tenant' && <TenantForm tenant={modal.tenant} notify={notify} onClose={() => setModal(null)}
+      {modal?.kind === 'tenant' && <TenantForm ipv6={ipv6On} tenant={modal.tenant} notify={notify} onClose={() => setModal(null)}
         onSaved={() => { setModal(null); reload(); notify('Zapisano'); }} />}
       {modal?.kind === 'site' && <SiteForm site={modal.site} tenantId={modal.tenantId} notify={notify} onClose={() => setModal(null)}
         onSaved={() => { setModal(null); reload(); notify('Zapisano'); }} />}

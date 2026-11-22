@@ -427,7 +427,7 @@ export function Network({ id, notify, reload, onEditNet, onDeleteNet }) {
           <div class="crumb">{net.tenant.name} / {net.site.name}</div>
           <h1>{net.name} <span class="mono cidr">{net.cidr}</span></h1>
           <div class="chips">
-            {net.vlan && <span class="chip accent">VLAN {net.vlan}</span>}
+            <span class="chip accent">VLAN {net.vlan ?? 1}</span>
             {net.gateway && <span class="chip" title={net.gateway_seen ? `${t('widziana')} ${ago(net.gateway_seen)}${net.gateway_mac ? ` · ${net.gateway_mac}` : ''}` : ''}>{t('Brama')} <b class="mono">{net.gateway}</b></span>}
             {net.network_addr && <span class="chip muted-chip">{t('Adres sieci')} <b class="mono">{net.network_addr}</b></span>}
             {net.broadcast_addr && <span class="chip muted-chip">Broadcast <b class="mono">{net.broadcast_addr}</b></span>}

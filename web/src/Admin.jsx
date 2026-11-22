@@ -296,13 +296,22 @@ function Notifications({ notify }) {
 
 function Settings({ notify }) {
   const [reg, setReg] = useState(true);
+  const [v6, setV6] = useState(false);
   const [sys, setSys] = useState(null);
-  useEffect(() => { api.me().then((r) => setReg(r.registration_open)); api.system().then(setSys).catch((e) => notify(e.message, 'error')); }, []);
+  useEffect(() => { api.me().then((r) => { setReg(r.registration_open); setV6(!!r.ipv6_enabled); }); api.system().then(setSys).catch((e) => notify(e.message, 'error')); }, []);
   const toggle = async () => {
     try { setReg((await api.setSettings({ registration_open: !reg })).registration_open); } catch (e) { notify(e.message, 'error'); }
   };
+  const toggleV6 = async () => {
+    try { setV6((await api.setSettings({ ipv6_enabled: !v6 })).ipv6_enabled); notify('Zapisano'); } catch (e) { notify(e.message, 'error'); }
+  };
   return (
     <div class="admin-grid">
+      <section class="card">
+        <h3>IPv6</h3>
+        <label class="toggle"><input type="checkbox" checked={v6} onChange={toggleV6} /> {t('Włącz planowanie IPv6')}</label>
+        <p class="muted small-text">{t('Po włączeniu każdy tenant może osobno zaznaczyć, że używa IPv6. Tenanty bez IPv6 nie pokazują żadnych opcji IPv6. Zaplanowane prefiksy zostają w bazie, gdy wyłączysz tę opcję.')}</p>
+      </section>
       <section class="card">
         <h3>{t('Dostęp')}</h3>
         <label class="toggle"><input type="checkbox" checked={reg} onChange={toggle} /> {t('Otwarta rejestracja nowych użytkowników')}</label>

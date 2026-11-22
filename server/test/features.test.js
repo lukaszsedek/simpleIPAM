@@ -145,3 +145,37 @@ test('bulk: remove tags, set description and expiry; search finds a MAC in any n
   for (const q of ['AA-BB-CC-DD-EE-FF', 'aabb.ccdd.eeff', 'aabbccddeeff', 'bb:cc:dd']) assert.equal((await admin('GET', '/api/search', {}, { q })).length, 1, q);
   assert.equal((await admin('GET', '/api/search', {}, { q: 'guest' })).length, 2);                  // tags
 });
+
+test('IPv6 planning is opt-in: global switch, then per tenant; prefixes are carved from v6 pools', async () => {
+  const { admin, site } = await boot();
+  const tenantId = (await admin('GET', '/api/overview'))[0].id;
+  await assert.rejects(admin('POST', `/api/tenants/${tenantId}/pools`, { cidr: 'fd00::/48' }), /nie obsługuje IPv6/);   // off by default
+  assert.equal((await admin('GET', '/api/me')).ipv6_enabled, false);
+  await admin('PUT', '/api/settings', { ipv6_enabled: true });
+  await assert.rejects(admin('POST', `/api/tenants/${tenantId}/pools`, { cidr: 'fd00::/48' }), /nie obsługuje IPv6/);   // the tenant has not opted in
+  await admin('PUT', `/api/tenants/${tenantId}`, { name: 'home', ipv6: true });
+  assert.equal((await admin('GET', `/api/tenants/${tenantId}/plan`)).ipv6, true);
+
+  const pool = await admin('POST', `/api/tenants/${tenantId}/pools`, { cidr: 'FD00:0:0:0::/48', name: 'ULA' });
+  assert.equal(pool.cidr, 'fd00::/48');
+  await assert.rejects(admin('POST', `/api/tenants/${tenantId}/pools`, { cidr: 'fd00:0:0:5::/64' }), /nakłada się/);
+  await admin('POST', `/api/tenants/${tenantId}/pools`, { cidr: '10.0.0.0/8' });                       // v4 pools coexist
+  assert.equal((await admin('GET', `/api/pools/${pool.id}/suggest`, {}, { prefix: 64 })).cidr, 'fd00::/64');
+  const a = await admin('POST', `/api/pools/${pool.id}/allocate`, { site_id: site.id, name: 'LAN', prefix: 64, vlan: 10 });
+  const b = await admin('POST', `/api/pools/${pool.id}/allocate`, { site_id: site.id, name: 'Domyślna', prefix: 64 });
+  assert.deepEqual([a.cidr, b.cidr, b.vlan], ['fd00::/64', 'fd00:0:0:1::/64', null]);
+  await assert.rejects(admin('POST', `/api/pools/${pool.id}/allocate`, { site_id: site.id, name: 'x', prefix: 64, vlan: 10 }), /VLAN 10 jest już używany/);
+  await assert.rejects(admin('POST', `/api/pools/${pool.id}/allocate`, { site_id: site.id, name: 'x', cidr: 'fd01::/64' }), /poza pulą/);
+  const plan = await admin('GET', `/api/tenants/${tenantId}/plan`);
+  assert.equal(plan.pools.length, 1);
+  assert.equal(plan.pools6[0].allocations.length, 2);
+  assert.equal(plan.pools6[0].allocated_64, '2');
+  assert.equal(plan.pools6[0].total_64, '65536');
+  assert.equal(plan.pools6[0].next[64], 'fd00:0:0:2::/64');
+  await admin('DELETE', `/api/v6-prefixes/${b.id}`);
+  assert.equal((await admin('GET', `/api/tenants/${tenantId}/plan`)).pools6[0].allocations.length, 1);
+
+  await admin('PUT', '/api/settings', { ipv6_enabled: false });                                      // switching it off hides everything again
+  const off = await admin('GET', `/api/tenants/${tenantId}/plan`);
+  assert.deepEqual([off.ipv6, off.pools6.length], [false, 0]);
+});
